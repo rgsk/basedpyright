@@ -20,6 +20,7 @@ import { ConstraintSolution } from './constraintSolution';
 import { addConstraintsForExpectedType } from './constraintSolver';
 import { ConstraintTracker } from './constraintTracker';
 import { applyConstructorTransform, hasConstructorTransform } from './constructorTransform';
+import { applyFrozenDictEntries, isFrozenDictClass } from './frozenDicts';
 import { Arg, CallResult, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import {
     ClassType,
@@ -235,6 +236,16 @@ export function validateConstructorArgs(
                 evaluator.getTypeOfExpression(arg.valueExpression);
             }
         });
+    }
+
+    // Record the entries of a frozendict constructed with literal keys.
+    if (
+        returnResult.returnType &&
+        !returnResult.argumentErrors &&
+        !returnResult.isTypeIncomplete &&
+        isFrozenDictClass(type)
+    ) {
+        returnResult.returnType = applyFrozenDictEntries(evaluator, argList, returnResult.returnType);
     }
 
     return returnResult;

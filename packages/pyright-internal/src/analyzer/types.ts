@@ -130,6 +130,7 @@ export interface TypeSameOptions {
     ignoreTypeFlags?: boolean;
     ignoreConditions?: boolean;
     ignoreTypedDictNarrowEntries?: boolean;
+    ignoreFrozenDictEntries?: boolean;
     honorTypeForm?: boolean;
     honorIsTypeArgExplicit?: boolean;
     treatAnySameAsUnknown?: boolean;
@@ -842,6 +843,12 @@ export interface ClassDetailsPriv {
     // This is used for the TypedDict "update" method.
     isTypedDictPartial?: boolean;
 
+    // For an instance of the builtin frozendict that was constructed with
+    // keys that are all string literals, this maps each key to the type of
+    // its value. Because a frozendict can't be mutated, these entries remain
+    // accurate for the lifetime of the object.
+    frozenDictEntries?: Map<string, Type> | undefined;
+
     // Indicates whether the class is an asymmetric descriptor
     // or property - one where the __get__ and __set__ types differ.
     // If undefined, it hasn't been tested yet for asymmetry.
@@ -1017,6 +1024,40 @@ export namespace ClassType {
         const newClassType = TypeBase.cloneType(classType);
         newClassType.priv.typedDictNarrowedEntries = narrowedEntries;
         return newClassType;
+    }
+
+    export function cloneForFrozenDictEntries(classType: ClassType, entries: Map<string, Type> | undefined): ClassType {
+        const newClassType = TypeBase.cloneType(classType);
+        newClassType.priv.frozenDictEntries = entries;
+        return newClassType;
+    }
+
+    // Determines whether two frozendict instances have the same known entries.
+    export function isFrozenDictEntriesSame(
+        type1: ClassType,
+        type2: ClassType,
+        options: TypeSameOptions = {},
+        recursionCount = 0
+    ): boolean {
+        const entries1 = type1.priv.frozenDictEntries;
+        const entries2 = type2.priv.frozenDictEntries;
+
+        if (!entries1 || !entries2) {
+            return !entries1 && !entries2;
+        }
+
+        if (entries1.size !== entries2.size) {
+            return false;
+        }
+
+        for (const [key, valueType1] of entries1.entries()) {
+            const valueType2 = entries2.get(key);
+            if (!valueType2 || !isTypeSame(valueType1, valueType2, options, recursionCount)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     export function cloneForPartialTypedDict(classType: ClassType): ClassType {
@@ -3554,6 +3595,13 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
                 return false;
             }
 
+            if (
+                !options.ignoreFrozenDictEntries &&
+                !ClassType.isFrozenDictEntriesSame(type1, classType2, options, recursionCount)
+            ) {
+                return false;
+            }
+
             return true;
         }
 
@@ -4111,6 +4159,20 @@ function _addTypeIfUnique(unionType: UnionType, typeToAdd: UnionableType, elideR
                         unionType.priv.subtypes[i] = typeToAdd;
                         return;
                     }
+                }
+            }
+
+            // A frozendict with known entries is a narrower form of the same
+            // frozendict without them, so the latter subsumes the former.
+            if (
+                (type.priv.frozenDictEntries || typeToAdd.priv.frozenDictEntries) &&
+                isTypeSame(type, typeToAdd, { ignoreFrozenDictEntries: true, honorTypeForm: true })
+            ) {
+                if (!typeToAdd.priv.frozenDictEntries) {
+                    unionType.priv.subtypes[i] = typeToAdd;
+                    return;
+                } else if (!type.priv.frozenDictEntries) {
+                    return;
                 }
             }
         }

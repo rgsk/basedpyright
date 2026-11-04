@@ -1,6 +1,6 @@
 import { BasedConfigOptions, ConfigOptions } from '../common/configOptions';
 import { DiagnosticRule } from '../common/diagnosticRules';
-import { pythonVersion3_8 } from '../common/pythonVersion';
+import { pythonVersion3_8, pythonVersion3_15 } from '../common/pythonVersion';
 import { Uri } from '../common/uri/uri';
 import { UriEx } from '../common/uri/uriUtils';
 import { resolveSampleFilePath, typeAnalyzeSampleFiles, validateResultsButBased } from './testUtils';
@@ -324,6 +324,27 @@ test('self cannot have default value', () => {
                 code: DiagnosticRule.reportSelfClsDefault,
                 line: 13,
                 message: 'Parameter "cls" must not have a default value',
+            },
+        ],
+    });
+});
+
+test('frozendict with literal keys', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_15;
+    const analysisResults = typeAnalyzeSampleFiles(['based_frozendict.py'], configOptions);
+    validateResultsButBased(analysisResults, {
+        errors: [
+            {
+                code: DiagnosticRule.reportGeneralTypeIssues,
+                line: 12,
+                message:
+                    'Could not access item in frozendict\n  "nme" is not a defined key in "frozendict[str, str | int]"',
+            },
+            {
+                code: DiagnosticRule.reportGeneralTypeIssues,
+                line: 61,
+                message: 'Could not access item in frozendict\n  "a" is not a defined key in "frozendict[str, str]"',
             },
         ],
     });

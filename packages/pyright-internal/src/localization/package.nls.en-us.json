@@ -603,6 +603,10 @@
             "message": "Unterminated expression in f-string; expecting \"}\"",
             "comment": "'f-string' is the common English slang for a Python format string"
         },
+        "frozenDictAccess": {
+            "message": "Could not access item in frozendict",
+            "comment": "{Locked='frozendict'}"
+        },
         "functionDecoratorTypeUnknown": "Untyped function decorator obscures type of function; ignoring decorator",
         "functionDecoratorTypeAny": "Function decorator obscures type of function because its type is Any",
         "functionInConditionalExpression": {

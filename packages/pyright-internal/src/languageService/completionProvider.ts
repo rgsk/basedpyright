@@ -3626,14 +3626,17 @@ export class CompletionProvider {
         completionMap: CompletionMap
     ) {
         let typedDicts: ClassType[] = [];
+        const frozenDictEntries: Map<string, Type>[] = [];
 
         doForEachSubtype(type, (subtype) => {
             if (isClassInstance(subtype) && ClassType.isTypedDictClass(subtype)) {
                 typedDicts.push(subtype);
+            } else if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
+                frozenDictEntries.push(subtype.priv.frozenDictEntries);
             }
         });
 
-        if (typedDicts.length === 0) {
+        if (typedDicts.length === 0 && frozenDictEntries.length === 0) {
             return false;
         }
 
@@ -3664,6 +3667,23 @@ export class CompletionProvider {
                     valueTypes.push(entry.valueType);
                 }
             );
+        });
+
+        // A frozendict with known entries offers its keys the same way.
+        frozenDictEntries.forEach((entries) => {
+            entries.forEach((entryType, key) => {
+                if (excludes.has(key) || completionMap.has(key)) {
+                    return;
+                }
+
+                let valueTypes = keyValueTypes.get(key);
+                if (!valueTypes) {
+                    valueTypes = [];
+                    keyValueTypes.set(key, valueTypes);
+                }
+
+                valueTypes.push(entryType);
+            });
         });
 
         keyValueTypes.forEach((valueTypes, key) => {

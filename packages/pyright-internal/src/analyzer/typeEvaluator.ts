@@ -158,6 +158,7 @@ import {
     isEnumClassWithMembers,
     isEnumMetaclass,
 } from './enums';
+import { getTypeOfIndexedFrozenDict } from './frozenDicts';
 import { applyFunctionTransform } from './functionTransform';
 import { createNamedTupleType } from './namedTuples';
 import {
@@ -8695,6 +8696,14 @@ export function createTypeEvaluator(
             }
         }
 
+        // Handle reads of a frozendict with known entries specially.
+        if (isClassInstance(baseType) && baseType.priv.frozenDictEntries && usage.method === 'get') {
+            const typeFromFrozenDict = getTypeOfIndexedFrozenDict(evaluatorInterface, node, baseType);
+            if (typeFromFrozenDict) {
+                return typeFromFrozenDict;
+            }
+        }
+
         const magicMethodName = getIndexAccessMagicMethodName(usage);
         const itemMethodType = getBoundMagicMethod(baseType, magicMethodName, selfType, node.d.leftExpr);
 
@@ -9685,10 +9694,13 @@ export function createTypeEvaluator(
         // what mypy does -- and what various library authors expect.
         const arg0Type = stripTypeGuard(arg0TypeResult.type);
 
+        // A type expression can't spell the known entries of a frozendict,
+        // so they are ignored.
         const typeSameOptions = {
             treatAnySameAsUnknown: true,
             ignorePseudoGeneric: true,
             ignoreConditions: true,
+            ignoreFrozenDictEntries: true,
         };
         let typesMatch = isTypeSame(assertedType, arg0Type, typeSameOptions);
 
@@ -27073,6 +27085,28 @@ export function createTypeEvaluator(
                         );
 
                         return false;
+                    }
+                }
+
+                // A frozendict with known entries accepts only a frozendict that
+                // has each of those entries, with an assignable value type.
+                const destFrozenDictEntries = destType.priv.frozenDictEntries;
+                if (destFrozenDictEntries) {
+                    const srcFrozenDictEntries = concreteSrcType.priv.frozenDictEntries;
+                    for (const [key, destEntryType] of destFrozenDictEntries) {
+                        const srcEntryType = srcFrozenDictEntries?.get(key);
+                        if (!srcEntryType) {
+                            diag?.addMessage(
+                                LocAddendum.keyUndefined().format({ name: key, type: printType(srcType) })
+                            );
+                            return false;
+                        }
+
+                        const entryDiag = diag?.createAddendum();
+                        if (!assignType(destEntryType, srcEntryType, entryDiag, constraints, flags, recursionCount)) {
+                            entryDiag?.addMessage(LocAddendum.memberTypeMismatch().format({ name: key }));
+                            return false;
+                        }
                     }
                 }
 

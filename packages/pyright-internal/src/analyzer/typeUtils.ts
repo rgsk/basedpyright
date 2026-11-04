@@ -3145,6 +3145,14 @@ function _requiresSpecialization(type: Type, options?: RequiresSpecializationOpt
                 }
             }
 
+            if (type.priv.frozenDictEntries) {
+                for (const entryType of type.priv.frozenDictEntries.values()) {
+                    if (requiresSpecialization(entryType, options, recursionCount)) {
+                        return true;
+                    }
+                }
+            }
+
             if (type.priv.typeArgs) {
                 return type.priv.typeArgs.some((typeArg) => requiresSpecialization(typeArg, options, recursionCount));
             }
@@ -4172,18 +4180,35 @@ export class TypeVarTransformer {
             });
         }
 
+        // Specialize the known entries of a frozendict along with its type args.
+        let newFrozenDictEntries: Map<string, Type> | undefined;
+        if (classType.priv.frozenDictEntries) {
+            newFrozenDictEntries = new Map<string, Type>();
+            classType.priv.frozenDictEntries.forEach((entryType, key) => {
+                const newEntryType = this.apply(entryType, recursionCount);
+                if (newEntryType !== entryType) {
+                    specializationNeeded = true;
+                }
+                newFrozenDictEntries!.set(key, newEntryType);
+            });
+        }
+
         // If specialization wasn't needed, don't allocate a new class.
         if (!specializationNeeded) {
             return classType;
         }
 
-        return ClassType.specialize(
+        const specializedClass = ClassType.specialize(
             classType,
             newTypeArgs,
             isTypeArgExplicit,
             /* includeSubclasses */ undefined,
             newTupleTypeArgs
         );
+
+        return newFrozenDictEntries
+            ? ClassType.cloneForFrozenDictEntries(specializedClass, newFrozenDictEntries)
+            : specializedClass;
     }
 
     transformTypeVarsInFunctionType(sourceType: FunctionType, recursionCount: number): FunctionType | OverloadedType {
