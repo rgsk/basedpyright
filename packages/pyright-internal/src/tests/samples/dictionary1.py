@@ -26,7 +26,7 @@ d1 = {**t1}
 
 d2 = {"hi": 3}
 d3 = {**d2, "": 4}
-reveal_type(d3, expected_text="dict[str, int]")
+reveal_type(d3, expected_text="dict[{'hi': int, '': int}]")
 
 
 LitChoices = Literal["ab", "bcd"]

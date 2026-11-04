@@ -23,7 +23,7 @@ import * as TestUtils from './testUtils';
 test('GenericType1', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['genericType1.py']);
 
-    TestUtils.validateResults(analysisResults, 5);
+    TestUtils.validateResults(analysisResults, 3);
 });
 
 test('GenericType2', () => {

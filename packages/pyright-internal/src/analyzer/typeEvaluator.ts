@@ -12902,6 +12902,12 @@ export function createTypeEvaluator(
                             extraItemsType = ClassType.hasExactKnownEntries(argType)
                                 ? NeverType.createNever()
                                 : (argType.priv.typeArgs?.[1] ?? UnknownType.create());
+
+                            // As with any dict, a parameter that none of its known keys
+                            // matches may get its value from a key the checker hasn't seen.
+                            if (!ClassType.hasExactKnownEntries(argType)) {
+                                unpackedDictArgType = extraItemsType;
+                            }
                         } else {
                             const tdEntries = getTypedDictMembersForClass(evaluatorInterface, argType);
                             knownItems = new Map(
@@ -15765,10 +15771,14 @@ export function createTypeEvaluator(
 
         // Strip any literal values and TypeForm types.
         const keyTypes = keyTypeResults.map((t) =>
-            stripTypeForm(convertSpecialFormToRuntimeValue(stripLiteralValue(t.type), flags, !hasExpectedType))
+            removeDictKnownEntries(
+                stripTypeForm(convertSpecialFormToRuntimeValue(stripLiteralValue(t.type), flags, !hasExpectedType))
+            )
         );
         const valueTypes = valueTypeResults.map((t) =>
-            stripTypeForm(convertSpecialFormToRuntimeValue(stripLiteralValue(t.type), flags, !hasExpectedType))
+            removeDictKnownEntries(
+                stripTypeForm(convertSpecialFormToRuntimeValue(stripLiteralValue(t.type), flags, !hasExpectedType))
+            )
         );
 
         if (keyTypes.length > 0) {
@@ -16352,7 +16362,9 @@ export function createTypeEvaluator(
             }
         });
 
-        entryTypes = entryTypes.map((t) => stripLiteralValue(t));
+        // A dict's known entries don't apply to the dicts in a container (see
+        // ClassType.specialize), so they shouldn't make its entries' types differ.
+        entryTypes = entryTypes.map((t) => removeDictKnownEntries(stripLiteralValue(t)));
 
         let inferredEntryType: Type = hasExpectedType ? AnyType.create() : UnknownType.create();
         if (entryTypes.length > 0) {

@@ -165,7 +165,7 @@ def s18():
     reveal_type(a2, expected_text="dict[object, object]")
 
     b1: Mapping[str, float] = {"a": 3, "b": 5}
-    reveal_type(b1, expected_text="dict[str, int]")
+    reveal_type(b1, expected_text="dict[{'a': int, 'b': int}]")
 
     b2: dict[str, float] = {"a": 3, "b": 5}
     reveal_type(b2, expected_text="dict[str, float]")

@@ -3,7 +3,7 @@ import { DiagnosticRule } from '../common/diagnosticRules';
 import { pythonVersion3_8, pythonVersion3_14, pythonVersion3_15 } from '../common/pythonVersion';
 import { Uri } from '../common/uri/uri';
 import { UriEx } from '../common/uri/uriUtils';
-import { resolveSampleFilePath, typeAnalyzeSampleFiles, validateResultsButBased } from './testUtils';
+import { resolveSampleFilePath, typeAnalyzeSampleFiles, validateResults, validateResultsButBased } from './testUtils';
 
 test('reportUnreachable', () => {
     const configOptions = new ConfigOptions(Uri.empty());
@@ -390,6 +390,14 @@ test('frozendict with literal keys', () => {
             { code: DiagnosticRule.reportAssignmentType, line: 218 },
         ],
     });
+});
+
+test('dict with literal keys', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_15;
+    configOptions.diagnosticRuleSet.strictDictionaryInference = true;
+    const analysisResults = typeAnalyzeSampleFiles(['based_dict_entries.py'], configOptions);
+    validateResults(analysisResults, 3);
 });
 
 test('frozendict from the frozendict package', () => {

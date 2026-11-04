@@ -9,6 +9,6 @@ test = {"key": "value"}
 
 while True:
     a = test
-    reveal_type(a, expected_text="dict[str, str]")
+    reveal_type(a, expected_text="dict[{'key': str}]")
     test = a.copy()
-    reveal_type(test, expected_text="dict[str, str]")
+    reveal_type(test, expected_text="dict[{'key': str}]")

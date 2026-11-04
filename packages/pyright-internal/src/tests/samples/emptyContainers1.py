@@ -40,7 +40,7 @@ def func2(a: bool):
     if a:
         val1 = {"a": 2}
 
-    reveal_type(val1, expected_text="dict[str, int]")
+    reveal_type(val1, expected_text="dict[{'a': int}]")
 
     if a:
         val2 = {}
@@ -62,7 +62,7 @@ def func2(a: bool):
         val3 = {"b": 3.4}
 
     print(val3)
-    reveal_type(val3, expected_text="dict[str, float]")
+    reveal_type(val3, expected_text="dict[{'b': float}]")
 
 
 class A:

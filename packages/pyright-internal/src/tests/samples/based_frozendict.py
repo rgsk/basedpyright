@@ -147,8 +147,8 @@ def merging(plain: frozendict[str, int]) -> None:
     # without known entries on one side, there are none in the result
     assert_type(defaults | plain, frozendict[str, float | int])
     assert_type(frozendict(plain, extra=1), frozendict[str, int])
-    # a dict on the left makes a dict
-    assert_type({"epochs": 20} | defaults, dict[str, int | float])
+    # a dict on the left makes a dict, with the keys of both
+    assert_type(({"epochs": 20} | defaults)["lr"], float)
 
 
 # The keys are always present: .get of a known key is its value type, and .get of

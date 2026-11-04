@@ -89,6 +89,13 @@
                     textEdit: { range: helper.getPositionRange('marker5'), newText: '"key2"' },
                     detail: Consts.IndexValueDetail,
                 },
+                // The key of the literal is known: name is Literal['key'].
+                {
+                    label: '"key"',
+                    kind: Consts.CompletionItemKind.Constant,
+                    textEdit: { range: helper.getPositionRange('marker5'), newText: '"key"' },
+                    detail: Consts.IndexValueDetail,
+                },
             ],
         },
         marker6: {

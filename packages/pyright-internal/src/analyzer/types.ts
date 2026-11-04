@@ -4250,7 +4250,10 @@ function _addTypeIfUnique(unionType: UnionType, typeToAdd: UnionableType, elideR
                             mergedEntries.set(key, combineTypes([entryType, entryTypeToAdd]));
                         }
                     });
-                    unionType.priv.subtypes[i] = ClassType.cloneForKnownEntries(type, mergedEntries);
+                    unionType.priv.subtypes[i] = ClassType.cloneForKnownEntries(
+                        type,
+                        mergedEntries.size > 0 ? mergedEntries : undefined
+                    );
                     return;
                 }
             }

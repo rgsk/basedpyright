@@ -259,9 +259,10 @@ function addDictDisplayEntries(
 // Evaluates the entries' value types. Returns undefined if one isn't known yet
 // or doesn't fit the frozendict's value type. A literal is widened unless the
 // expected type (frozendicts with known entries) needs it for that key, as in
-// shape: Circle | Square = frozendict(kind='circle', ...). For a dict (allowInexact),
-// it's widened even where its value type kept the literal, as dict(size=(1, 2))
-// does: its entries only describe reads.
+// shape: Circle | Square = frozendict(kind='circle', ...). For a dict (allowInexact)
+// without an expected type, it's widened even where its value type kept the literal,
+// as dict(size=(1, 2)) does: its entries only describe reads. With an expected type
+// (d: dict[str, Literal[3]] = {...}), the value type is what was asked for.
 function resolveEntries(
     evaluator: TypeEvaluator,
     sources: Map<string, EntrySource>,
@@ -291,7 +292,7 @@ function resolveEntries(
         const strippedType = stripLiteralsInTuples(evaluator, entryType);
         if (
             strippedType !== entryType &&
-            (allowInexact || evaluator.assignType(valueType, strippedType)) &&
+            ((allowInexact && !expectedType) || evaluator.assignType(valueType, strippedType)) &&
             !isLiteralNeeded(evaluator, expectedType, key, entryType, strippedType)
         ) {
             entryType = strippedType;

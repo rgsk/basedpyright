@@ -10,7 +10,7 @@ val1 = {
     "a": 1,
     "b": 0,
 }
-reveal_type(val1, expected_text="dict[str, int]")
+reveal_type(val1, expected_text="dict[{'a': int, 'b': int}]")
 
 val2 = OrderedDict(val1)
 reveal_type(val2, expected_text="OrderedDict[str, int]")

@@ -2932,6 +2932,33 @@ export class CompletionProvider {
     }
 
     private _getIndexKeys(indexNode: IndexNode, invocationNode: ParseNode) {
+        const keys = this._getIndexKeysFromBaseType(indexNode, invocationNode);
+
+        // Add the known entries of a dict (wherever it came from, as in make()[...])
+        // that weren't found by looking at its uses in this file.
+        const baseType = this.evaluator.getType(indexNode.d.leftExpr);
+        const quote = this.parseResults.tokenizerOutput.predominantSingleQuoteCharacter;
+        if (!baseType) {
+            return keys;
+        }
+        doForEachSubtype(baseType, (subtype) => {
+            if (!isClassInstance(subtype) || !subtype.priv.knownEntries || ClassType.hasExactKnownEntries(subtype)) {
+                return;
+            }
+            subtype.priv.knownEntries.forEach((_, key) => {
+                if (keys.some((existing) => existing === `"${key}"` || existing === `'${key}'`)) {
+                    return;
+                }
+                if (!/['"\\\n]/.test(key)) {
+                    keys.push(`${quote}${key}${quote}`);
+                }
+            });
+        });
+
+        return keys;
+    }
+
+    private _getIndexKeysFromBaseType(indexNode: IndexNode, invocationNode: ParseNode): string[] {
         const baseType = this.evaluator.getType(indexNode.d.leftExpr);
         if (!baseType || !isClassInstance(baseType)) {
             return [];
@@ -3633,8 +3660,10 @@ export class CompletionProvider {
         doForEachSubtype(type, (subtype) => {
             if (isClassInstance(subtype) && ClassType.isTypedDictClass(subtype)) {
                 typedDicts.push(subtype);
-            } else if (isClassInstance(subtype) && subtype.priv.knownEntries) {
-                knownEntries.push(subtype.priv.knownEntries);
+            } else if (isClassInstance(subtype) && ClassType.hasExactKnownEntries(subtype)) {
+                // A dict's known entries are offered with the other keys found for
+                // a dict (see _getIndexKeys).
+                knownEntries.push(subtype.priv.knownEntries!);
             }
         });
 
