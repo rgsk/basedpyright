@@ -7,7 +7,7 @@ from typing import Literal, assert_type
 
 def keyword_arguments() -> None:
     user = frozendict(name="rahul", age=27)
-    assert_type(user, frozendict[str, str | int])
+    assert_type(user, frozendict[{"name": str, "age": int}])
     assert_type(user["name"], str)
     assert_type(user["age"], int)
     user["nme"]  # error
@@ -82,14 +82,52 @@ def generic() -> None:
 def tuple_values() -> None:
     # literals inside a tuple are widened like the value type itself
     cfg = frozendict({"lr": 1e-3, "layers": (64, 64)})
-    assert_type(cfg, frozendict[str, float | tuple[int, int]])
+    assert_type(cfg, frozendict[{"lr": float, "layers": tuple[int, int]}])
     assert_type(cfg["layers"], tuple[int, int])
     nested = frozendict({"shape": ((1, 2), "x")})
     assert_type(nested["shape"], tuple[tuple[int, int], str])
     # as far as the value type allows: for keyword arguments it keeps them
     by_kwarg = frozendict(size=(1, 2))
-    assert_type(by_kwarg, frozendict[str, tuple[Literal[1], Literal[2]]])
+    assert_type(by_kwarg, frozendict[{"size": tuple[Literal[1], Literal[2]]}])
     assert_type(by_kwarg["size"], tuple[Literal[1], Literal[2]])
     # unless the declared value type needs the literals
     pinned: frozendict[str, tuple[Literal[1], int]] = frozendict({"p": (1, 2)})
     assert_type(pinned["p"], tuple[Literal[1], Literal[2]])
+
+
+# The known entries can be spelled in a type expression.
+type User = frozendict[{"name": str, "age": int}]
+
+
+def load() -> User:
+    return frozendict(name="rahul", age=27)
+
+
+def annotations(plain: frozendict[str, str | int]) -> None:
+    user = load()
+    assert_type(user["age"], int)
+    assert_type(user, frozendict[{"name": str, "age": int}])
+    inline: frozendict[{"a-b": int, "pair": tuple[int, int]}] = frozendict({"a-b": 1, "pair": (1, 2)})
+    assert_type(inline["pair"], tuple[int, int])
+    missing: User = frozendict(name="rahul")
+    extra: User = frozendict(name="rahul", age=27, city="delhi")
+    wrong_type: User = frozendict(name="rahul", age="27")
+    unknown_keys: User = plain
+    widened: frozendict[str, str | int] = user
+    print(missing, extra, wrong_type, unknown_keys, widened)
+
+
+def invalid_annotations(
+    non_literal_key: frozendict[{1: int}],
+    too_many: frozendict[{"a": int}, int],
+) -> None: ...
+
+
+def widened_entries() -> None:
+    # each entry is checked on its own, as a frozendict can't change
+    user = frozendict(name="rahul", age=27)
+    optional_age: frozendict[{"name": str, "age": int | None}] = user
+    built: frozendict[{"name": str, "age": int | None}] = frozendict(name="rahul", age=27)
+    users = [user]
+    still_invariant: list[frozendict[{"name": str, "age": int | None}]] = users
+    print(optional_age, built, still_invariant)

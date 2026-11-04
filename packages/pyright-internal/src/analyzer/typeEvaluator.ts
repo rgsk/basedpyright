@@ -158,7 +158,7 @@ import {
     isEnumClassWithMembers,
     isEnumMetaclass,
 } from './enums';
-import { getTypeOfIndexedFrozenDict } from './frozenDicts';
+import { getFrozenDictEntriesFromTypeArg, getTypeOfIndexedFrozenDict, isFrozenDictClass } from './frozenDicts';
 import { applyFunctionTransform } from './functionTransform';
 import { createNamedTupleType } from './namedTuples';
 import {
@@ -409,6 +409,7 @@ interface GetTypeArgsOptions {
     isFinalAnnotation?: boolean;
     isClassVarAnnotation?: boolean;
     supportsTypedDictTypeArg?: boolean;
+    supportsFrozenDictShapeArg?: boolean;
 }
 
 export interface MemberAccessTypeResult {
@@ -8422,12 +8423,17 @@ export function createTypeEvaluator(
                         nodeInfo.getFileInfo(node).diagnosticRuleSet.enableExperimentalFeatures &&
                         ClassType.isBuiltIn(concreteSubtype, 'TypedDict');
 
+                    // frozendict[{'key': T, ...}] spells the known entries of a frozendict.
+                    const supportsFrozenDictShapeArg =
+                        isInstantiableClass(concreteSubtype) && isFrozenDictClass(concreteSubtype);
+
                     let typeArgs = getTypeArgs(node, flags, {
                         isAnnotatedClass,
                         hasCustomClassGetItem: hasCustomClassGetItem || !isGenericClass,
                         isFinalAnnotation,
                         isClassVarAnnotation,
                         supportsTypedDictTypeArg,
+                        supportsFrozenDictShapeArg,
                     });
 
                     if (!isAnnotatedClass) {
@@ -8993,7 +8999,12 @@ export function createTypeEvaluator(
                     node: expr,
                 };
             } else {
-                typeResult = getTypeArg(expr, adjFlags, !!options?.supportsTypedDictTypeArg && argIndex === 0);
+                typeResult = getTypeArg(
+                    expr,
+                    adjFlags,
+                    !!options?.supportsTypedDictTypeArg && argIndex === 0,
+                    !!options?.supportsFrozenDictShapeArg && argIndex === 0
+                );
             }
 
             return typeResult;
@@ -9099,7 +9110,12 @@ export function createTypeEvaluator(
         return undefined;
     }
 
-    function getTypeArg(node: ExpressionNode, flags: EvalFlags, supportsDictExpression: boolean): TypeResultWithNode {
+    function getTypeArg(
+        node: ExpressionNode,
+        flags: EvalFlags,
+        supportsDictExpression: boolean,
+        supportsFrozenDictShape = false
+    ): TypeResultWithNode {
         let typeResult: TypeResultWithNode;
 
         let adjustedFlags =
@@ -9121,6 +9137,12 @@ export function createTypeEvaluator(
 
             // Set the node's type so it isn't reevaluated later.
             setTypeResultForNode(node, { type: UnknownType.create() });
+        } else if (node.nodeType === ParseNodeType.Dictionary && supportsFrozenDictShape) {
+            typeResult = {
+                type: UnknownType.create(),
+                frozenDictEntries: getFrozenDictEntriesFromTypeArg(evaluatorInterface, node),
+                node,
+            };
         } else if (node.nodeType === ParseNodeType.Dictionary && supportsDictExpression) {
             const inlinedTypeDict =
                 prefetched?.typedDictClass && isInstantiableClass(prefetched.typedDictClass)
@@ -9694,13 +9716,10 @@ export function createTypeEvaluator(
         // what mypy does -- and what various library authors expect.
         const arg0Type = stripTypeGuard(arg0TypeResult.type);
 
-        // A type expression can't spell the known entries of a frozendict,
-        // so they are ignored.
         const typeSameOptions = {
             treatAnySameAsUnknown: true,
             ignorePseudoGeneric: true,
             ignoreConditions: true,
-            ignoreFrozenDictEntries: true,
         };
         let typesMatch = isTypeSame(assertedType, arg0Type, typeSameOptions);
 
@@ -23111,6 +23130,33 @@ export function createTypeEvaluator(
                 minTypeArgCount = firstDefaultParamIndex;
             }
 
+            // frozendict[{'key': T, ...}]: a frozendict[str, <the value types>] with those entries.
+            const frozenDictEntries = typeArgs.length > 0 ? typeArgs[0].frozenDictEntries : undefined;
+            if (frozenDictEntries) {
+                if (typeArgs.length > 1) {
+                    addDiagnostic(
+                        DiagnosticRule.reportInvalidTypeArguments,
+                        LocMessage.typeArgsTooMany().format({
+                            name: classType.priv.aliasName || classType.shared.name,
+                            expected: 1,
+                            received: typeArgCount,
+                        }),
+                        typeArgs[1].node
+                    );
+                }
+
+                const keyType =
+                    prefetched?.strClass && isInstantiableClass(prefetched.strClass)
+                        ? ClassType.cloneAsInstance(prefetched.strClass)
+                        : UnknownType.create();
+                const specializedClass = ClassType.specialize(
+                    classType,
+                    [keyType, combineTypes([...frozenDictEntries.values()])],
+                    /* isTypeArgExplicit */ true
+                );
+                return { type: ClassType.cloneForFrozenDictEntries(specializedClass, frozenDictEntries) };
+            }
+
             // Classes that accept inlined type dict type args allow only one.
             if (typeArgs.length > 0 && typeArgs[0].inlinedTypeDict) {
                 if (typeArgs.length > 1) {
@@ -27088,16 +27134,32 @@ export function createTypeEvaluator(
                     }
                 }
 
-                // A frozendict with known entries accepts only a frozendict that
-                // has each of those entries, with an assignable value type.
+                // A frozendict with known entries accepts only a frozendict with
+                // exactly those keys, each with an assignable value type.
                 const destFrozenDictEntries = destType.priv.frozenDictEntries;
                 if (destFrozenDictEntries) {
                     const srcFrozenDictEntries = concreteSrcType.priv.frozenDictEntries;
+                    for (const key of srcFrozenDictEntries?.keys() ?? []) {
+                        if (!destFrozenDictEntries.has(key)) {
+                            diag?.addMessage(
+                                LocAddendum.typedDictFieldUndefined().format({ name: key, type: printType(destType) })
+                            );
+                            return false;
+                        }
+                    }
+
+                    if (!srcFrozenDictEntries && destFrozenDictEntries.size === 0) {
+                        diag?.addMessage(
+                            LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType))
+                        );
+                        return false;
+                    }
+
                     for (const [key, destEntryType] of destFrozenDictEntries) {
                         const srcEntryType = srcFrozenDictEntries?.get(key);
                         if (!srcEntryType) {
                             diag?.addMessage(
-                                LocAddendum.keyUndefined().format({ name: key, type: printType(srcType) })
+                                LocAddendum.typedDictFieldRequired().format({ name: key, type: printType(destType) })
                             );
                             return false;
                         }
@@ -27108,6 +27170,11 @@ export function createTypeEvaluator(
                             return false;
                         }
                     }
+
+                    // The entries say everything about the values, and a frozendict can't
+                    // change, so its invariant value type argument needn't match exactly:
+                    // frozendict[{'age': int}] is a frozendict[{'age': int | None}].
+                    return true;
                 }
 
                 // Handle LiteralString special form.

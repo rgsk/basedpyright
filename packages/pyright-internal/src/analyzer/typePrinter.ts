@@ -1145,6 +1145,24 @@ function printObjectTypeForClassInternal(
         importTracker?.add(type.shared, objName);
     }
 
+    // A frozendict with known entries prints them as they are spelled in a
+    // type expression: frozendict[{'name': str, 'age': int}].
+    if (type.priv.frozenDictEntries) {
+        const entryStrings = [...type.priv.frozenDictEntries].map(([key, entryType]) => {
+            const entryTypeText = printTypeInternal(
+                entryType,
+                printTypeFlags,
+                returnTypeCallback,
+                uniqueNameMap,
+                recursionTypes,
+                recursionCount,
+                importTracker
+            );
+            return `${printStringLiteralKey(key)}: ${entryTypeText}`;
+        });
+        return `${objName}[{${entryStrings.join(', ')}}]`;
+    }
+
     // If this is a pseudo-generic class, don't display the type arguments
     // or type parameters because it will confuse users.
     if (!ClassType.isPseudoGenericClass(type)) {
@@ -1768,4 +1786,8 @@ export function getPrintTypeFlags(configOptions: ConfigOptions): PrintTypeFlags 
     }
 
     return flags;
+}
+
+function printStringLiteralKey(value: string): string {
+    return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')}'`;
 }

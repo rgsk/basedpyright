@@ -12,10 +12,10 @@
 import { DiagnosticAddendum } from '../common/diagnostic';
 import { DiagnosticRule } from '../common/diagnosticRules';
 import { LocAddendum, LocMessage } from '../localization/localize';
-import { ArgCategory, ExpressionNode, IndexNode, ParseNodeType } from '../parser/parseNodes';
+import { ArgCategory, DictionaryNode, ExpressionNode, IndexNode, ParseNodeType } from '../parser/parseNodes';
 import { Arg, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import { ClassType, isClassInstance, Type, UnknownType } from './types';
-import { doForEachSubtype, isTupleClass, mapSubtypes, specializeTupleClass } from './typeUtils';
+import { convertToInstance, doForEachSubtype, isTupleClass, mapSubtypes, specializeTupleClass } from './typeUtils';
 
 export function isFrozenDictClass(classType: ClassType): boolean {
     return ClassType.isBuiltIn(classType, 'frozendict');
@@ -182,4 +182,54 @@ export function getTypeOfIndexedFrozenDict(
     }
 
     return { type, isIncomplete: !!indexTypeResult.isIncomplete };
+}
+
+// Reads the known entries spelled as the type argument of frozendict[{'key': T, ...}].
+// Each key must be a string literal; each value is a type expression.
+export function getFrozenDictEntriesFromTypeArg(evaluator: TypeEvaluator, node: DictionaryNode): Map<string, Type> {
+    const entries = new Map<string, Type>();
+
+    node.d.items.forEach((entry) => {
+        if (entry.nodeType !== ParseNodeType.DictionaryKeyEntry) {
+            evaluator.addDiagnostic(
+                DiagnosticRule.reportInvalidTypeForm,
+                LocMessage.typedDictSecondArgDictEntry(),
+                entry
+            );
+            return;
+        }
+
+        const valueType = convertToInstance(evaluator.getTypeOfExpressionExpectingType(entry.d.valueExpr).type);
+
+        if (entry.d.keyExpr.nodeType !== ParseNodeType.StringList) {
+            evaluator.addDiagnostic(
+                DiagnosticRule.reportInvalidTypeForm,
+                LocMessage.typedDictEntryName(),
+                entry.d.keyExpr
+            );
+            return;
+        }
+
+        const key = entry.d.keyExpr.d.strings.map((s) => s.d.value).join('');
+        if (entries.has(key)) {
+            evaluator.addDiagnostic(
+                DiagnosticRule.reportInvalidTypeForm,
+                LocMessage.typedDictEntryUnique(),
+                entry.d.keyExpr
+            );
+            return;
+        }
+
+        entries.set(key, valueType);
+    });
+
+    // The dict and its keys aren't type expressions: don't evaluate them as such later.
+    evaluator.setTypeResultForNode(node, { type: UnknownType.create() });
+    node.d.items.forEach((entry) => {
+        if (entry.nodeType === ParseNodeType.DictionaryKeyEntry) {
+            evaluator.setTypeResultForNode(entry.d.keyExpr, { type: UnknownType.create() });
+        }
+    });
+
+    return entries;
 }
