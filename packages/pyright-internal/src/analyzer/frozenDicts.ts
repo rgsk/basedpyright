@@ -24,7 +24,12 @@ export function isFrozenDictClass(classType: ClassType): boolean {
 // Called with the result of a call to the frozendict constructor. If every key
 // passed to it is a string literal, returns the result with its known entries
 // attached.
-export function applyFrozenDictEntries(evaluator: TypeEvaluator, argList: Arg[], returnType: Type): Type {
+export function applyFrozenDictEntries(
+    evaluator: TypeEvaluator,
+    argList: Arg[],
+    returnType: Type,
+    expectedType?: Type
+): Type {
     if (!isClassInstance(returnType) || !isFrozenDictClass(returnType)) {
         return returnType;
     }
@@ -34,7 +39,7 @@ export function applyFrozenDictEntries(evaluator: TypeEvaluator, argList: Arg[],
         return returnType;
     }
 
-    const entries = getEntriesFromArgs(evaluator, argList, valueType);
+    const entries = getEntriesFromArgs(evaluator, argList, valueType, expectedType);
     return entries ? ClassType.cloneForFrozenDictEntries(returnType, entries) : returnType;
 }
 
@@ -46,7 +51,12 @@ type EntrySource = { expr: ExpressionNode } | { type: Type };
 // **unpacking: frozendict(a=1), frozendict({'a': 1}, b=2), frozendict(other, b=2),
 // frozendict(**other, b=2). A dict display or a mapping must have known string keys:
 // literals, or the entries of another frozendict with known entries.
-function getEntriesFromArgs(evaluator: TypeEvaluator, argList: Arg[], valueType: Type): Map<string, Type> | undefined {
+function getEntriesFromArgs(
+    evaluator: TypeEvaluator,
+    argList: Arg[],
+    valueType: Type,
+    expectedType: Type | undefined
+): Map<string, Type> | undefined {
     // A later key replaces the value of an earlier one but keeps its position,
     // as at runtime. A Map does the same.
     const sources = new Map<string, EntrySource>();
@@ -86,7 +96,7 @@ function getEntriesFromArgs(evaluator: TypeEvaluator, argList: Arg[], valueType:
         }
     }
 
-    return sources.size > 0 ? resolveEntries(evaluator, sources, valueType) : undefined;
+    return sources.size > 0 ? resolveEntries(evaluator, sources, valueType, expectedType) : undefined;
 }
 
 // Called with the result of left | right (or left |= right). When the result is a
@@ -166,11 +176,14 @@ function addDictDisplayEntries(
 }
 
 // Evaluates the entries' value types. Returns undefined if one isn't known yet
-// or doesn't fit the frozendict's value type.
+// or doesn't fit the frozendict's value type. A literal is widened unless the
+// expected type (frozendicts with known entries) needs it for that key, as in
+// shape: Circle | Square = frozendict(kind='circle', ...).
 function resolveEntries(
     evaluator: TypeEvaluator,
     sources: Map<string, EntrySource>,
-    valueType: Type
+    valueType: Type,
+    expectedType?: Type
 ): Map<string, Type> | undefined {
     const entries = new Map<string, Type>();
     for (const [key, source] of sources) {
@@ -192,7 +205,11 @@ function resolveEntries(
         // frozendict(size=(1, 2)) is frozendict[str, tuple[int, int]].
         let entryType = typeResult.type;
         const strippedType = stripLiteralsInTuples(evaluator, entryType);
-        if (strippedType !== entryType && evaluator.assignType(valueType, strippedType)) {
+        if (
+            strippedType !== entryType &&
+            evaluator.assignType(valueType, strippedType) &&
+            !isLiteralNeeded(evaluator, expectedType, key, entryType, strippedType)
+        ) {
             entryType = strippedType;
         }
 
@@ -432,4 +449,31 @@ export function getFrozenDictEntryTypeForKeys(type: Type, keyType: Type): Type |
     });
 
     return isLiteralKey ? combineTypes(entryTypes) : undefined;
+}
+
+// Whether the expected type has a frozendict with known entries whose entry for
+// the key accepts the literal type but not its widened type.
+function isLiteralNeeded(
+    evaluator: TypeEvaluator,
+    expectedType: Type | undefined,
+    key: string,
+    literalType: Type,
+    strippedType: Type
+): boolean {
+    if (!expectedType) {
+        return false;
+    }
+
+    let isNeeded = false;
+    doForEachSubtype(expectedType, (subtype) => {
+        const expectedEntryType = isClassInstance(subtype) ? subtype.priv.frozenDictEntries?.get(key) : undefined;
+        if (
+            expectedEntryType &&
+            evaluator.assignType(expectedEntryType, literalType) &&
+            !evaluator.assignType(expectedEntryType, strippedType)
+        ) {
+            isNeeded = true;
+        }
+    });
+    return isNeeded;
 }

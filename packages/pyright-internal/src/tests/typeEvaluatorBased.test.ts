@@ -387,6 +387,7 @@ test('frozendict with literal keys', () => {
                 message: expect.stringContaining('Unable to match unpacked frozendict argument to parameters'),
             },
             { code: DiagnosticRule.reportArgumentType, line: 182 },
+            { code: DiagnosticRule.reportAssignmentType, line: 218 },
         ],
     });
 });

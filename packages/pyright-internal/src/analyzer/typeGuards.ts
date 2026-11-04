@@ -2478,6 +2478,13 @@ function narrowTypeForTypedDictKey(
                 }
             }
 
+            // The keys of a frozendict with known entries are exact: a key is present
+            // exactly when it's one of them.
+            if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
+                const isPresent = subtype.priv.frozenDictEntries.has(literalKey.priv.literalValue as string);
+                return isPresent === isPositiveTest ? subtype : undefined;
+            }
+
             return subtype;
         }
     );
@@ -2498,32 +2505,37 @@ export function narrowTypeForDiscriminatedDictEntryComparison(
     let canNarrow = true;
 
     const narrowedType = mapSubtypes(referenceType, (subtype) => {
+        // A TypedDict, or a frozendict with known entries.
+        let entryType: Type | undefined;
         if (isClassInstance(subtype) && ClassType.isTypedDictClass(subtype)) {
             const symbolMap = getTypedDictMembersForClass(evaluator, subtype);
-            const tdEntry = symbolMap.knownItems.get(indexLiteralType.priv.literalValue as string);
+            entryType = symbolMap.knownItems.get(indexLiteralType.priv.literalValue as string)?.valueType;
+        } else if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
+            entryType = subtype.priv.frozenDictEntries.get(indexLiteralType.priv.literalValue as string);
+        }
 
-            if (tdEntry && isLiteralTypeOrUnion(tdEntry.valueType)) {
-                if (isPositiveTest) {
-                    let foundMatch = false;
+        if (entryType && isLiteralTypeOrUnion(entryType)) {
+            const discriminatorType = entryType;
+            if (isPositiveTest) {
+                let foundMatch = false;
 
-                    doForEachSubtype(literalType, (literalSubtype) => {
-                        if (evaluator.assignType(tdEntry.valueType, literalSubtype)) {
-                            foundMatch = true;
-                        }
-                    });
+                doForEachSubtype(literalType, (literalSubtype) => {
+                    if (evaluator.assignType(discriminatorType, literalSubtype)) {
+                        foundMatch = true;
+                    }
+                });
 
-                    return foundMatch ? subtype : undefined;
-                } else {
-                    let foundNonMatch = false;
+                return foundMatch ? subtype : undefined;
+            } else {
+                let foundNonMatch = false;
 
-                    doForEachSubtype(literalType, (literalSubtype) => {
-                        if (!evaluator.assignType(literalSubtype, tdEntry.valueType)) {
-                            foundNonMatch = true;
-                        }
-                    });
+                doForEachSubtype(literalType, (literalSubtype) => {
+                    if (!evaluator.assignType(literalSubtype, discriminatorType)) {
+                        foundNonMatch = true;
+                    }
+                });
 
-                    return foundNonMatch ? subtype : undefined;
-                }
+                return foundNonMatch ? subtype : undefined;
             }
         }
 

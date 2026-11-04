@@ -245,7 +245,12 @@ export function validateConstructorArgs(
         !returnResult.isTypeIncomplete &&
         isFrozenDictClass(type)
     ) {
-        returnResult.returnType = applyFrozenDictEntries(evaluator, argList, returnResult.returnType);
+        returnResult.returnType = applyFrozenDictEntries(
+            evaluator,
+            argList,
+            returnResult.returnType,
+            inferenceContext?.expectedType
+        );
     }
 
     return returnResult;

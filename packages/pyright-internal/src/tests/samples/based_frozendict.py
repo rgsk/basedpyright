@@ -191,3 +191,30 @@ def patterns() -> None:
             assert_type(missing, Never)
         case {"age": age}:
             assert_type(age, int)
+
+
+# Unions of frozendicts with known entries narrow like unions of TypedDicts.
+type Circle = frozendict[{"kind": Literal["circle"], "radius": float}]
+type Square = frozendict[{"kind": Literal["square"], "side": float}]
+
+
+def tagged(shape: Circle | Square) -> None:
+    if shape["kind"] == "circle":
+        assert_type(shape["radius"], float)
+    else:
+        assert_type(shape["side"], float)
+    if "radius" in shape:
+        assert_type(shape["radius"], float)
+    else:
+        assert_type(shape["side"], float)
+
+
+# A literal value is kept where the expected type needs it.
+def building() -> None:
+    tagged(frozendict(kind="circle", radius=1.0))
+    circle: Circle = frozendict({"kind": "circle", "radius": 1.0})
+    tagged(circle)
+    untagged = frozendict(kind="circle")
+    assert_type(untagged, frozendict[{"kind": str}])
+    wrong: Circle = frozendict(kind="square", radius=1.0)  # error
+    print(wrong)
