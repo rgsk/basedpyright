@@ -1,6 +1,6 @@
 import { BasedConfigOptions, ConfigOptions } from '../common/configOptions';
 import { DiagnosticRule } from '../common/diagnosticRules';
-import { pythonVersion3_8, pythonVersion3_15 } from '../common/pythonVersion';
+import { pythonVersion3_8, pythonVersion3_14, pythonVersion3_15 } from '../common/pythonVersion';
 import { Uri } from '../common/uri/uri';
 import { UriEx } from '../common/uri/uriUtils';
 import { resolveSampleFilePath, typeAnalyzeSampleFiles, validateResultsButBased } from './testUtils';
@@ -388,6 +388,19 @@ test('frozendict with literal keys', () => {
             },
             { code: DiagnosticRule.reportArgumentType, line: 182 },
             { code: DiagnosticRule.reportAssignmentType, line: 218 },
+        ],
+    });
+});
+
+test('frozendict from the frozendict package', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    configOptions.projectRoot = UriEx.file(resolveSampleFilePath('based_frozendict_pypi'));
+    const analysisResults = typeAnalyzeSampleFiles(['based_frozendict_pypi/sample.py'], configOptions);
+    validateResultsButBased(analysisResults, {
+        errors: [
+            { code: DiagnosticRule.reportGeneralTypeIssues, line: 8 },
+            { code: DiagnosticRule.reportAssignmentType, line: 18 },
         ],
     });
 });

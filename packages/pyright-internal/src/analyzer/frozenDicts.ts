@@ -14,11 +14,22 @@ import { DiagnosticRule } from '../common/diagnosticRules';
 import { LocAddendum, LocMessage } from '../localization/localize';
 import { ArgCategory, CallNode, DictionaryNode, ExpressionNode, IndexNode, ParseNodeType } from '../parser/parseNodes';
 import { Arg, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
-import { ClassType, combineTypes, isClassInstance, isInstantiableClass, Type, UnknownType } from './types';
+import {
+    ClassType,
+    combineTypes,
+    isAnyOrUnknown,
+    isClassInstance,
+    isInstantiableClass,
+    Type,
+    UnknownType,
+} from './types';
 import { convertToInstance, doForEachSubtype, isTupleClass, mapSubtypes, specializeTupleClass } from './typeUtils';
 
+// The builtin frozendict (Python 3.15+), and the frozendict class of the PyPI
+// package of the same name, which provides one for older versions. Subclasses
+// are not included: they may add methods or override the ones relied on here.
 export function isFrozenDictClass(classType: ClassType): boolean {
-    return ClassType.isBuiltIn(classType, 'frozendict');
+    return ClassType.isBuiltIn(classType, 'frozendict') || classType.shared.fullName === 'frozendict.frozendict';
 }
 
 // Called with the result of a call to the frozendict constructor. If every key
@@ -355,7 +366,8 @@ export function getFrozenDictEntriesFromTypeArg(evaluator: TypeEvaluator, node: 
 // - x.get('key') is the key's value type, as the default is never used;
 // - x.get('missing') is the default (None without one), with no error, since
 //   it doesn't fail at runtime.
-// Other calls, such as x.get(key) with a key that isn't a literal, keep their type.
+// Other calls, such as x.get(key) with a key that isn't a literal, keep their type;
+// other methods returning a frozendict lose the entries.
 export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNode, returnType: Type): Type {
     const memberAccess = node.d.leftExpr;
     if (memberAccess.nodeType !== ParseNodeType.MemberAccess) {
@@ -363,16 +375,24 @@ export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNo
     }
 
     const methodName = memberAccess.d.member.d.value;
+    const receiverType = evaluator.getTypeOfExpression(memberAccess.d.leftExpr).type;
     if (methodName === 'fromkeys') {
-        const classType = evaluator.getTypeOfExpression(memberAccess.d.leftExpr).type;
-        return applyFrozenDictFromKeys(evaluator, node, classType, returnType);
+        return applyFrozenDictFromKeys(evaluator, node, receiverType, returnType);
     }
 
     if (methodName !== 'get' && methodName !== 'copy') {
-        return returnType;
+        // Other methods that return a frozendict, such as delete() of the PyPI
+        // package (declared to return Self), would otherwise carry the receiver's
+        // entries into a result that may have other keys.
+        let isKnownFrozenDict = false;
+        doForEachSubtype(receiverType, (subtype) => {
+            if (isClassInstance(subtype) && isFrozenDictClass(subtype) && subtype.priv.frozenDictEntries) {
+                isKnownFrozenDict = true;
+            }
+        });
+        return isKnownFrozenDict ? removeFrozenDictEntries(returnType) : returnType;
     }
 
-    const receiverType = evaluator.getTypeOfExpression(memberAccess.d.leftExpr).type;
     let allHaveEntries = true;
     doForEachSubtype(receiverType, (subtype) => {
         if (!isClassInstance(subtype) || !isFrozenDictClass(subtype) || !subtype.priv.frozenDictEntries) {
@@ -508,7 +528,12 @@ function applyFrozenDictFromKeys(evaluator: TypeEvaluator, node: CallNode, class
         return returnType;
     }
 
-    const valueType = args.length === 2 ? returnType.priv.typeArgs?.[1] : evaluator.getNoneType();
+    let valueType = args.length === 2 ? returnType.priv.typeArgs?.[1] : evaluator.getNoneType();
+    if (args.length === 2 && (!valueType || isAnyOrUnknown(valueType))) {
+        // The frozendict package's stub leaves the value type unsolved: every key
+        // gets the given value, so use its type.
+        valueType = evaluator.stripLiteralValue(evaluator.getTypeOfExpression(args[1].d.valueExpr).type);
+    }
     if (!valueType) {
         return returnType;
     }
@@ -527,4 +552,12 @@ function applyFrozenDictFromKeys(evaluator: TypeEvaluator, node: CallNode, class
     }
 
     return entries.size > 0 ? ClassType.cloneForFrozenDictEntries(returnType, entries) : returnType;
+}
+
+function removeFrozenDictEntries(type: Type): Type {
+    return mapSubtypes(type, (subtype) =>
+        isClassInstance(subtype) && subtype.priv.frozenDictEntries
+            ? ClassType.cloneForFrozenDictEntries(subtype, undefined)
+            : subtype
+    );
 }
