@@ -263,7 +263,7 @@ export interface TypeResult<T extends Type = Type> {
     inlinedTypeDict?: ClassType;
 
     // For the known entries of a frozendict spelled frozendict[{'key': T}].
-    frozenDictEntries?: Map<string, Type>;
+    knownEntries?: Map<string, Type>;
 
     // Used for getTypeOfBoundMember to indicate that class
     // that declares the member.

@@ -3628,17 +3628,17 @@ export class CompletionProvider {
         completionMap: CompletionMap
     ) {
         let typedDicts: ClassType[] = [];
-        const frozenDictEntries: Map<string, Type>[] = [];
+        const knownEntries: Map<string, Type>[] = [];
 
         doForEachSubtype(type, (subtype) => {
             if (isClassInstance(subtype) && ClassType.isTypedDictClass(subtype)) {
                 typedDicts.push(subtype);
-            } else if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
-                frozenDictEntries.push(subtype.priv.frozenDictEntries);
+            } else if (isClassInstance(subtype) && subtype.priv.knownEntries) {
+                knownEntries.push(subtype.priv.knownEntries);
             }
         });
 
-        if (typedDicts.length === 0 && frozenDictEntries.length === 0) {
+        if (typedDicts.length === 0 && knownEntries.length === 0) {
             return false;
         }
 
@@ -3672,7 +3672,7 @@ export class CompletionProvider {
         });
 
         // A frozendict with known entries offers its keys the same way.
-        frozenDictEntries.forEach((entries) => {
+        knownEntries.forEach((entries) => {
             entries.forEach((entryType, key) => {
                 if (excludes.has(key) || completionMap.has(key)) {
                     return;
@@ -3775,7 +3775,7 @@ export class CompletionProvider {
 
         let hasEntries = false;
         doForEachSubtype(expectedTypeResult.type, (subtype) => {
-            if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
+            if (isClassInstance(subtype) && subtype.priv.knownEntries) {
                 hasEntries = true;
             }
         });
@@ -4053,7 +4053,7 @@ export class CompletionProvider {
         if (expectedFrozenDictType) {
             doForEachSubtype(expectedFrozenDictType, (subtype) => {
                 if (isClassInstance(subtype)) {
-                    subtype.priv.frozenDictEntries?.forEach((_, key) => {
+                    subtype.priv.knownEntries?.forEach((_, key) => {
                         if (Tokenizer.isPythonIdentifier(key) && !Tokenizer.isPythonKeyword(key)) {
                             argNameSet.add(key);
                         }

@@ -8708,7 +8708,7 @@ export function createTypeEvaluator(
         }
 
         // Handle reads of a frozendict with known entries specially.
-        if (isClassInstance(baseType) && baseType.priv.frozenDictEntries && usage.method === 'get') {
+        if (isClassInstance(baseType) && baseType.priv.knownEntries && usage.method === 'get') {
             const typeFromFrozenDict = getTypeOfIndexedFrozenDict(evaluatorInterface, node, baseType);
             if (typeFromFrozenDict) {
                 return typeFromFrozenDict;
@@ -9145,7 +9145,7 @@ export function createTypeEvaluator(
         } else if (node.nodeType === ParseNodeType.Dictionary && supportsFrozenDictShape) {
             typeResult = {
                 type: UnknownType.create(),
-                frozenDictEntries: getFrozenDictEntriesFromTypeArg(evaluatorInterface, node),
+                knownEntries: getFrozenDictEntriesFromTypeArg(evaluatorInterface, node),
                 node,
             };
         } else if (node.nodeType === ParseNodeType.Dictionary && supportsDictExpression) {
@@ -12887,15 +12887,15 @@ export function createTypeEvaluator(
                         unpackedDictArgType = argType;
                     } else if (
                         isClassInstance(argType) &&
-                        (ClassType.isTypedDictClass(argType) || argType.priv.frozenDictEntries)
+                        (ClassType.isTypedDictClass(argType) || argType.priv.knownEntries)
                     ) {
                         // Handle the special case where it is a TypedDict (or a frozendict
                         // with known entries) and we know which keys are present.
                         let knownItems: Map<string, Type>;
                         let extraItemsType: Type;
-                        if (argType.priv.frozenDictEntries) {
+                        if (argType.priv.knownEntries) {
                             // The keys of a frozendict with known entries are exact.
-                            knownItems = argType.priv.frozenDictEntries;
+                            knownItems = argType.priv.knownEntries;
                             extraItemsType = NeverType.createNever();
                         } else {
                             const tdEntries = getTypedDictMembersForClass(evaluatorInterface, argType);
@@ -12981,7 +12981,7 @@ export function createTypeEvaluator(
                             if (!canSkipDiagnosticForNode(errorNode) && !isTypeIncomplete) {
                                 addDiagnostic(
                                     DiagnosticRule.reportCallIssue,
-                                    (argType.priv.frozenDictEntries
+                                    (argType.priv.knownEntries
                                         ? LocMessage.unpackedFrozenDictArgument()
                                         : LocMessage.unpackedTypedDictArgument()) + diag.getString(),
                                     argList[argIndex].valueExpression || errorNode
@@ -23153,8 +23153,8 @@ export function createTypeEvaluator(
             }
 
             // frozendict[{'key': T, ...}]: a frozendict[str, <the value types>] with those entries.
-            const frozenDictEntries = typeArgs.length > 0 ? typeArgs[0].frozenDictEntries : undefined;
-            if (frozenDictEntries) {
+            const knownEntries = typeArgs.length > 0 ? typeArgs[0].knownEntries : undefined;
+            if (knownEntries) {
                 if (typeArgs.length > 1) {
                     addDiagnostic(
                         DiagnosticRule.reportInvalidTypeArguments,
@@ -23173,10 +23173,10 @@ export function createTypeEvaluator(
                         : UnknownType.create();
                 const specializedClass = ClassType.specialize(
                     classType,
-                    [keyType, combineTypes([...frozenDictEntries.values()])],
+                    [keyType, combineTypes([...knownEntries.values()])],
                     /* isTypeArgExplicit */ true
                 );
-                return { type: ClassType.cloneForFrozenDictEntries(specializedClass, frozenDictEntries) };
+                return { type: ClassType.cloneForKnownEntries(specializedClass, knownEntries) };
             }
 
             // Classes that accept inlined type dict type args allow only one.
@@ -27158,9 +27158,9 @@ export function createTypeEvaluator(
 
                 // A frozendict with known entries accepts only a frozendict with
                 // exactly those keys, each with an assignable value type.
-                const destFrozenDictEntries = destType.priv.frozenDictEntries;
+                const destFrozenDictEntries = destType.priv.knownEntries;
                 if (destFrozenDictEntries) {
-                    const srcFrozenDictEntries = concreteSrcType.priv.frozenDictEntries;
+                    const srcFrozenDictEntries = concreteSrcType.priv.knownEntries;
                     for (const key of srcFrozenDictEntries?.keys() ?? []) {
                         if (!destFrozenDictEntries.has(key)) {
                             diag?.addMessage(

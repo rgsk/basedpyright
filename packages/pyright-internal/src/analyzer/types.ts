@@ -130,7 +130,7 @@ export interface TypeSameOptions {
     ignoreTypeFlags?: boolean;
     ignoreConditions?: boolean;
     ignoreTypedDictNarrowEntries?: boolean;
-    ignoreFrozenDictEntries?: boolean;
+    ignoreKnownEntries?: boolean;
     honorTypeForm?: boolean;
     honorIsTypeArgExplicit?: boolean;
     treatAnySameAsUnknown?: boolean;
@@ -843,11 +843,16 @@ export interface ClassDetailsPriv {
     // This is used for the TypedDict "update" method.
     isTypedDictPartial?: boolean;
 
-    // For an instance of the builtin frozendict that was constructed with
-    // keys that are all string literals, this maps each key to the type of
-    // its value. Because a frozendict can't be mutated, these entries remain
-    // accurate for the lifetime of the object.
-    frozenDictEntries?: Map<string, Type> | undefined;
+    // For an instance of frozendict or dict that was constructed with keys
+    // that are all string literals, this maps each key to the type of its
+    // value.
+    // - frozendict: because it can't be mutated, these entries are exact for
+    //   the lifetime of the object (see hasExactKnownEntries).
+    // - dict: the entries are what the checker has seen so far: code flow
+    //   analysis updates them on writes it can follow, and they're dropped
+    //   wherever it can't follow the dict. They never cause errors by
+    //   themselves; they only make reads more precise.
+    knownEntries?: Map<string, Type> | undefined;
 
     // Indicates whether the class is an asymmetric descriptor
     // or property - one where the __get__ and __set__ types differ.
@@ -1026,21 +1031,21 @@ export namespace ClassType {
         return newClassType;
     }
 
-    export function cloneForFrozenDictEntries(classType: ClassType, entries: Map<string, Type> | undefined): ClassType {
+    export function cloneForKnownEntries(classType: ClassType, entries: Map<string, Type> | undefined): ClassType {
         const newClassType = TypeBase.cloneType(classType);
-        newClassType.priv.frozenDictEntries = entries;
+        newClassType.priv.knownEntries = entries;
         return newClassType;
     }
 
     // Determines whether two frozendict instances have the same known entries.
-    export function isFrozenDictEntriesSame(
+    export function isKnownEntriesSame(
         type1: ClassType,
         type2: ClassType,
         options: TypeSameOptions = {},
         recursionCount = 0
     ): boolean {
-        const entries1 = type1.priv.frozenDictEntries;
-        const entries2 = type2.priv.frozenDictEntries;
+        const entries1 = type1.priv.knownEntries;
+        const entries2 = type2.priv.knownEntries;
 
         if (!entries1 || !entries2) {
             return !entries1 && !entries2;
@@ -3526,9 +3531,9 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
             // The entries of two frozendicts with known entries say everything about their
             // values (they're compared below), so their value type arguments needn't match.
             const compareFrozenDictEntriesOnly =
-                !options.ignoreFrozenDictEntries &&
-                !!type1.priv.frozenDictEntries &&
-                !!classType2.priv.frozenDictEntries;
+                !options.ignoreKnownEntries &&
+                !!type1.priv.knownEntries &&
+                !!classType2.priv.knownEntries;
 
             if (
                 (!options.ignorePseudoGeneric || !ClassType.isPseudoGenericClass(type1)) &&
@@ -3606,8 +3611,8 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
             }
 
             if (
-                !options.ignoreFrozenDictEntries &&
-                !ClassType.isFrozenDictEntriesSame(type1, classType2, options, recursionCount)
+                !options.ignoreKnownEntries &&
+                !ClassType.isKnownEntriesSame(type1, classType2, options, recursionCount)
             ) {
                 return false;
             }
@@ -4175,13 +4180,13 @@ function _addTypeIfUnique(unionType: UnionType, typeToAdd: UnionableType, elideR
             // A frozendict with known entries is a narrower form of the same
             // frozendict without them, so the latter subsumes the former.
             if (
-                (type.priv.frozenDictEntries || typeToAdd.priv.frozenDictEntries) &&
-                isTypeSame(type, typeToAdd, { ignoreFrozenDictEntries: true, honorTypeForm: true })
+                (type.priv.knownEntries || typeToAdd.priv.knownEntries) &&
+                isTypeSame(type, typeToAdd, { ignoreKnownEntries: true, honorTypeForm: true })
             ) {
-                if (!typeToAdd.priv.frozenDictEntries) {
+                if (!typeToAdd.priv.knownEntries) {
                     unionType.priv.subtypes[i] = typeToAdd;
                     return;
-                } else if (!type.priv.frozenDictEntries) {
+                } else if (!type.priv.knownEntries) {
                     return;
                 }
             }

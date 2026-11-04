@@ -1147,8 +1147,8 @@ function printObjectTypeForClassInternal(
 
     // A frozendict with known entries prints them as they are spelled in a
     // type expression: frozendict[{'name': str, 'age': int}].
-    if (type.priv.frozenDictEntries) {
-        const entryStrings = [...type.priv.frozenDictEntries].map(([key, entryType]) => {
+    if (type.priv.knownEntries) {
+        const entryStrings = [...type.priv.knownEntries].map(([key, entryType]) => {
             const entryTypeText = printTypeInternal(
                 entryType,
                 printTypeFlags,

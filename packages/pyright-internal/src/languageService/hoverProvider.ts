@@ -721,7 +721,7 @@ export class HoverProvider {
 
         const entryTypes: Type[] = [];
         doForEachSubtype(this._evaluator.getType(node.d.leftExpr) ?? UnknownType.create(), (subtype) => {
-            const entryType = isClassInstance(subtype) ? subtype.priv.frozenDictEntries?.get(key) : undefined;
+            const entryType = isClassInstance(subtype) ? subtype.priv.knownEntries?.get(key) : undefined;
             if (entryType) {
                 entryTypes.push(entryType);
             }

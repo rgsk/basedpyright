@@ -2480,8 +2480,8 @@ function narrowTypeForTypedDictKey(
 
             // The keys of a frozendict with known entries are exact: a key is present
             // exactly when it's one of them.
-            if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
-                const isPresent = subtype.priv.frozenDictEntries.has(literalKey.priv.literalValue as string);
+            if (isClassInstance(subtype) && subtype.priv.knownEntries) {
+                const isPresent = subtype.priv.knownEntries.has(literalKey.priv.literalValue as string);
                 return isPresent === isPositiveTest ? subtype : undefined;
             }
 
@@ -2510,8 +2510,8 @@ export function narrowTypeForDiscriminatedDictEntryComparison(
         if (isClassInstance(subtype) && ClassType.isTypedDictClass(subtype)) {
             const symbolMap = getTypedDictMembersForClass(evaluator, subtype);
             entryType = symbolMap.knownItems.get(indexLiteralType.priv.literalValue as string)?.valueType;
-        } else if (isClassInstance(subtype) && subtype.priv.frozenDictEntries) {
-            entryType = subtype.priv.frozenDictEntries.get(indexLiteralType.priv.literalValue as string);
+        } else if (isClassInstance(subtype) && subtype.priv.knownEntries) {
+            entryType = subtype.priv.knownEntries.get(indexLiteralType.priv.literalValue as string);
         }
 
         if (entryType && isLiteralTypeOrUnion(entryType)) {

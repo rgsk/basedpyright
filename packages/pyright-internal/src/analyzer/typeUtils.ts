@@ -3145,8 +3145,8 @@ function _requiresSpecialization(type: Type, options?: RequiresSpecializationOpt
                 }
             }
 
-            if (type.priv.frozenDictEntries) {
-                for (const entryType of type.priv.frozenDictEntries.values()) {
+            if (type.priv.knownEntries) {
+                for (const entryType of type.priv.knownEntries.values()) {
                     if (requiresSpecialization(entryType, options, recursionCount)) {
                         return true;
                     }
@@ -4181,15 +4181,15 @@ export class TypeVarTransformer {
         }
 
         // Specialize the known entries of a frozendict along with its type args.
-        let newFrozenDictEntries: Map<string, Type> | undefined;
-        if (classType.priv.frozenDictEntries) {
-            newFrozenDictEntries = new Map<string, Type>();
-            classType.priv.frozenDictEntries.forEach((entryType, key) => {
+        let newKnownEntries: Map<string, Type> | undefined;
+        if (classType.priv.knownEntries) {
+            newKnownEntries = new Map<string, Type>();
+            classType.priv.knownEntries.forEach((entryType, key) => {
                 const newEntryType = this.apply(entryType, recursionCount);
                 if (newEntryType !== entryType) {
                     specializationNeeded = true;
                 }
-                newFrozenDictEntries!.set(key, newEntryType);
+                newKnownEntries!.set(key, newEntryType);
             });
         }
 
@@ -4206,8 +4206,8 @@ export class TypeVarTransformer {
             newTupleTypeArgs
         );
 
-        return newFrozenDictEntries
-            ? ClassType.cloneForFrozenDictEntries(specializedClass, newFrozenDictEntries)
+        return newKnownEntries
+            ? ClassType.cloneForKnownEntries(specializedClass, newKnownEntries)
             : specializedClass;
     }
 

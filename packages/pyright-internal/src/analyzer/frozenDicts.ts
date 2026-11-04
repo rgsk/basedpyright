@@ -51,7 +51,7 @@ export function applyFrozenDictEntries(
     }
 
     const entries = getEntriesFromArgs(evaluator, argList, valueType, expectedType);
-    return entries ? ClassType.cloneForFrozenDictEntries(returnType, entries) : returnType;
+    return entries ? ClassType.cloneForKnownEntries(returnType, entries) : returnType;
 }
 
 // Where an entry's value comes from: an expression whose type is yet to be
@@ -139,16 +139,16 @@ export function applyFrozenDictMerge(
     }
 
     const entries = resolveEntries(evaluator, sources, valueType);
-    return entries ? ClassType.cloneForFrozenDictEntries(resultType, entries) : resultType;
+    return entries ? ClassType.cloneForKnownEntries(resultType, entries) : resultType;
 }
 
 // Adds the entries of a frozendict with known entries. Returns false for any other type.
 function addKnownEntries(type: Type, sources: Map<string, EntrySource>): boolean {
-    if (!isClassInstance(type) || !type.priv.frozenDictEntries) {
+    if (!isClassInstance(type) || !type.priv.knownEntries) {
         return false;
     }
 
-    type.priv.frozenDictEntries.forEach((entryType, key) => sources.set(key, { type: entryType }));
+    type.priv.knownEntries.forEach((entryType, key) => sources.set(key, { type: entryType }));
     return true;
 }
 
@@ -256,7 +256,7 @@ export function getTypeOfIndexedFrozenDict(
     node: IndexNode,
     baseType: ClassType
 ): TypeResult | undefined {
-    const entries = baseType.priv.frozenDictEntries;
+    const entries = baseType.priv.knownEntries;
     if (!entries) {
         return undefined;
     }
@@ -386,16 +386,16 @@ export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNo
         // entries into a result that may have other keys.
         let isKnownFrozenDict = false;
         doForEachSubtype(receiverType, (subtype) => {
-            if (isClassInstance(subtype) && isFrozenDictClass(subtype) && subtype.priv.frozenDictEntries) {
+            if (isClassInstance(subtype) && isFrozenDictClass(subtype) && subtype.priv.knownEntries) {
                 isKnownFrozenDict = true;
             }
         });
-        return isKnownFrozenDict ? removeFrozenDictEntries(returnType) : returnType;
+        return isKnownFrozenDict ? removeKnownEntries(returnType) : returnType;
     }
 
     let allHaveEntries = true;
     doForEachSubtype(receiverType, (subtype) => {
-        if (!isClassInstance(subtype) || !isFrozenDictClass(subtype) || !subtype.priv.frozenDictEntries) {
+        if (!isClassInstance(subtype) || !isFrozenDictClass(subtype) || !subtype.priv.knownEntries) {
             allHaveEntries = false;
         }
     });
@@ -440,7 +440,7 @@ export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNo
 
     const resultTypes: Type[] = [];
     doForEachSubtype(receiverType, (subtype) => {
-        const entries = (subtype as ClassType).priv.frozenDictEntries!;
+        const entries = (subtype as ClassType).priv.knownEntries!;
         keys.forEach((key) => resultTypes.push(entries.get(key) ?? defaultType));
     });
     return combineTypes(resultTypes);
@@ -451,7 +451,7 @@ export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNo
 // can't match, so it contributes nothing. Returns undefined when the type has no
 // known entries or a key isn't a string literal.
 export function getFrozenDictEntryTypeForKeys(type: Type, keyType: Type): Type | undefined {
-    const entries = isClassInstance(type) ? type.priv.frozenDictEntries : undefined;
+    const entries = isClassInstance(type) ? type.priv.knownEntries : undefined;
     if (!entries) {
         return undefined;
     }
@@ -491,7 +491,7 @@ function isLiteralNeeded(
 
     let isNeeded = false;
     doForEachSubtype(expectedType, (subtype) => {
-        const expectedEntryType = isClassInstance(subtype) ? subtype.priv.frozenDictEntries?.get(key) : undefined;
+        const expectedEntryType = isClassInstance(subtype) ? subtype.priv.knownEntries?.get(key) : undefined;
         if (
             expectedEntryType &&
             evaluator.assignType(expectedEntryType, literalType) &&
@@ -551,13 +551,13 @@ function applyFrozenDictFromKeys(evaluator: TypeEvaluator, node: CallNode, class
         entries.set(keyType.priv.literalValue, valueType);
     }
 
-    return entries.size > 0 ? ClassType.cloneForFrozenDictEntries(returnType, entries) : returnType;
+    return entries.size > 0 ? ClassType.cloneForKnownEntries(returnType, entries) : returnType;
 }
 
-function removeFrozenDictEntries(type: Type): Type {
+function removeKnownEntries(type: Type): Type {
     return mapSubtypes(type, (subtype) =>
-        isClassInstance(subtype) && subtype.priv.frozenDictEntries
-            ? ClassType.cloneForFrozenDictEntries(subtype, undefined)
+        isClassInstance(subtype) && subtype.priv.knownEntries
+            ? ClassType.cloneForKnownEntries(subtype, undefined)
             : subtype
     );
 }
