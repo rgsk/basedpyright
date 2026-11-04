@@ -24,6 +24,7 @@
 //// [|/*marker15*/cfg|] = {"lr": 0.1, "model": {"kind": "last"}}
 ////
 //// user[[|/*marker10*/"name"|]]
+//// nested[[|/*marker16*/"inner"|]]
 //// headers[[|/*marker11*/"content-type"|]]
 //// user[[|/*marker12*/"nme"|]]
 //// either[[|/*marker13*/"a"|]]
@@ -42,5 +43,6 @@ helper.verifyHover('markdown', {
     marker12: null,
     marker13: '```python\n(key) a: int\n```',
     marker14: null,
+    marker16: "```python\n(key) inner: frozendict[{\n    'a': int,\n}]\n```",
     marker15: "```python\n(variable) cfg: dict[{\n    'lr': float,\n    'model': dict[{\n        'kind': str,\n    }],\n}]\n```",
 });

@@ -736,7 +736,7 @@ export class HoverProvider {
         parts.length = 0;
         this._addResultsPart(
             parts,
-            `(key) ${key}: ${this._evaluator.printType(combineTypes(entryTypes))}`,
+            `(key) ${key}: ${this._evaluator.printType(combineTypes(entryTypes), { multilineKnownEntries: true })}`,
             /* python */ true
         );
         return true;
@@ -808,7 +808,11 @@ export class HoverProvider {
                 const entry = subtype.shared.typedDictEntries?.knownItems.get(node.d.value);
                 if (entry) {
                     // e.g. (key) name: str
-                    const text = '(key) ' + node.d.value + ': ' + this._evaluator.printType(entry.valueType);
+                    const text =
+                        '(key) ' +
+                        node.d.value +
+                        ': ' +
+                        this._evaluator.printType(entry.valueType, { multilineKnownEntries: true });
 
                     const declarations = ClassType.getSymbolTable(subtype).get(node.d.value)?.getDeclarations();
                     let declarationWithDoc: Declaration | undefined;
