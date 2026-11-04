@@ -274,7 +274,8 @@ export function getVariableTypeText(
             /* isProperty */ false,
             functionSignatureDisplay,
             typeNode,
-            sourceMapper
+            sourceMapper,
+            /* multilineKnownEntries */ true
         );
     }
 
@@ -417,7 +418,10 @@ export class HoverProvider {
                                     infoNode.d.value,
                                     this._evaluator,
                                     isProperty,
-                                    this._functionSignatureDisplay
+                                    this._functionSignatureDisplay,
+                                    /* typeNode */ undefined,
+                                    /* sourceMapper */ undefined,
+                                    /* multilineKnownEntries */ true
                                 );
                             }
 
@@ -660,7 +664,8 @@ export class HoverProvider {
                     isProperty,
                     this._functionSignatureDisplay,
                     /* typeNode */ undefined,
-                    this._sourceMapper
+                    this._sourceMapper,
+                    /* multilineKnownEntries */ true
                 );
 
                 this._addResultsPart(parts, signatureString, /* python */ true);

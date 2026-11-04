@@ -36,7 +36,7 @@ helper.verifyHover('markdown', {
     marker3: "```python\n(variable) nested: frozendict[{\n    'inner': frozendict[{\n        'a': int,\n    }],\n}]\n```",
     marker4: "```python\n(variable) either: frozendict[{\n    'a': int,\n}] | frozendict[{\n    'b': str,\n}]\n```",
     marker5: '```python\n(variable) plain: frozendict[str, int]\n```',
-    marker6: "```python\n(function) def make() -> tuple[frozendict[{'name': str, 'age': int}], Literal[1]]\n```",
+    marker6: "```python\n(function) def make() -> tuple[frozendict[{\n    'name': str,\n    'age': int,\n}], Literal[1]]\n```",
     marker7: '```python\n(function) def make_declared() -> frozendict[str, str | int]\n```',
     marker10: '```python\n(key) name: str\n```',
     marker11: '```python\n(key) content-type: str\n```',

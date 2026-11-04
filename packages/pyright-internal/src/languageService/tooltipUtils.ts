@@ -25,6 +25,7 @@ import {
     resolveMethodDocInfo,
 } from '../analyzer/typeDocStringUtils';
 import { TypeEvaluator } from '../analyzer/typeEvaluatorTypes';
+import { PrintTypeFlags } from '../analyzer/typePrinter';
 import { MemberAccessFlags, convertToInstance, lookUpClassMember } from '../analyzer/typeUtils';
 import {
     ClassType,
@@ -66,7 +67,8 @@ export function getToolTipForType(
     isProperty: boolean,
     functionSignatureDisplay: SignatureDisplayType,
     typeNode?: ExpressionNode,
-    sourceMapper?: SourceMapper
+    sourceMapper?: SourceMapper,
+    multilineKnownEntries = false
 ): string {
     // Support __call__ method for class instances to show the signature of the method
     if (type.category === TypeCategory.Class && isClassInstance(type) && typeNode) {
@@ -90,7 +92,8 @@ export function getToolTipForType(
             evaluator,
             functionSignatureDisplay,
             /* columnThreshold */ 70,
-            sourceMapper
+            sourceMapper,
+            multilineKnownEntries
         )}`;
     } else if (isFunction(type)) {
         signatureString = `${getFunctionTooltip(
@@ -100,11 +103,12 @@ export function getToolTipForType(
             evaluator,
             isProperty,
             functionSignatureDisplay,
-            sourceMapper
+            sourceMapper,
+            multilineKnownEntries
         )}`;
     } else {
         signatureString = label.length > 0 ? `(${label}) ` : '';
-        signatureString += `${name}: ${evaluator.printType(type)}`;
+        signatureString += `${name}: ${evaluator.printType(type, { multilineKnownEntries })}`;
     }
 
     return signatureString;
@@ -116,7 +120,8 @@ export function getOverloadedTooltip(
     evaluator: TypeEvaluator,
     functionSignatureDisplay: SignatureDisplayType,
     columnThreshold = 70,
-    sourceMapper?: SourceMapper
+    sourceMapper?: SourceMapper,
+    multilineKnownEntries = false
 ) {
     let content = '';
     const overloads = OverloadedType.getOverloads(type).map((o) =>
@@ -127,7 +132,8 @@ export function getOverloadedTooltip(
             evaluator,
             /* isProperty */ false,
             functionSignatureDisplay,
-            sourceMapper
+            sourceMapper,
+            multilineKnownEntries
         )
     );
 
@@ -156,12 +162,17 @@ export function getFunctionTooltip(
     evaluator: TypeEvaluator,
     isProperty = false,
     functionSignatureDisplay: SignatureDisplayType,
-    sourceMapper?: SourceMapper
+    sourceMapper?: SourceMapper,
+    multilineKnownEntries = false
 ) {
     const labelFormatted = label.length === 0 ? '' : `(${label}) `;
     const indentStr =
         functionSignatureDisplay === SignatureDisplayType.formatted ? '\n' + ' '.repeat(functionParamIndentOffset) : '';
     let funcParts = evaluator.printFunctionParts(type);
+    if (multilineKnownEntries) {
+        // Only the return type: the parameters are laid out one per line already.
+        funcParts = [funcParts[0], evaluator.printFunctionParts(type, PrintTypeFlags.MultilineKnownEntries)[1]];
+    }
     if (sourceMapper) {
         funcParts = replaceStubEllipsisDefaultValues(type, funcParts, sourceMapper);
     }
