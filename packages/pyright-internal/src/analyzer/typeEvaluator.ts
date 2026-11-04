@@ -159,7 +159,9 @@ import {
     isEnumMetaclass,
 } from './enums';
 import {
+    applyDictDisplayEntries,
     applyFrozenDictMethodCall,
+    removeDictKnownEntries,
     getFrozenDictEntriesFromTypeArg,
     getTypeOfIndexedFrozenDict,
     isFrozenDictClass,
@@ -8707,7 +8709,7 @@ export function createTypeEvaluator(
             }
         }
 
-        // Handle reads of a frozendict with known entries specially.
+        // Handle reads of a frozendict or dict with known entries specially.
         if (isClassInstance(baseType) && baseType.priv.knownEntries && usage.method === 'get') {
             const typeFromFrozenDict = getTypeOfIndexedFrozenDict(evaluatorInterface, node, baseType);
             if (typeFromFrozenDict) {
@@ -12890,13 +12892,16 @@ export function createTypeEvaluator(
                         (ClassType.isTypedDictClass(argType) || argType.priv.knownEntries)
                     ) {
                         // Handle the special case where it is a TypedDict (or a frozendict
-                        // with known entries) and we know which keys are present.
+                        // or dict with known entries) and we know which keys are present.
                         let knownItems: Map<string, Type>;
                         let extraItemsType: Type;
                         if (argType.priv.knownEntries) {
-                            // The keys of a frozendict with known entries are exact.
+                            // The keys of a frozendict with known entries are exact. A dict
+                            // may also have keys the checker hasn't seen, typed as its values.
                             knownItems = argType.priv.knownEntries;
-                            extraItemsType = NeverType.createNever();
+                            extraItemsType = ClassType.hasExactKnownEntries(argType)
+                                ? NeverType.createNever()
+                                : (argType.priv.typeArgs?.[1] ?? UnknownType.create());
                         } else {
                             const tdEntries = getTypedDictMembersForClass(evaluatorInterface, argType);
                             knownItems = new Map(
@@ -12981,9 +12986,11 @@ export function createTypeEvaluator(
                             if (!canSkipDiagnosticForNode(errorNode) && !isTypeIncomplete) {
                                 addDiagnostic(
                                     DiagnosticRule.reportCallIssue,
-                                    (argType.priv.knownEntries
-                                        ? LocMessage.unpackedFrozenDictArgument()
-                                        : LocMessage.unpackedTypedDictArgument()) + diag.getString(),
+                                    (!argType.priv.knownEntries
+                                        ? LocMessage.unpackedTypedDictArgument()
+                                        : ClassType.hasExactKnownEntries(argType)
+                                          ? LocMessage.unpackedFrozenDictArgument()
+                                          : LocMessage.unpackedDictArgument()) + diag.getString(),
                                     argList[argIndex].valueExpression || errorNode
                                 );
                             }
@@ -15472,6 +15479,26 @@ export function createTypeEvaluator(
     }
 
     function getTypeOfDictionary(
+        node: DictionaryNode,
+        flags: EvalFlags,
+        inferenceContext: InferenceContext | undefined
+    ): TypeResult {
+        const typeResult = getTypeOfDictionaryWithoutEntries(node, flags, inferenceContext);
+
+        // Record the entries of a dict display with literal keys.
+        if (!typeResult.isIncomplete) {
+            typeResult.type = applyDictDisplayEntries(
+                evaluatorInterface,
+                node,
+                typeResult.type,
+                inferenceContext?.expectedType
+            );
+        }
+
+        return typeResult;
+    }
+
+    function getTypeOfDictionaryWithoutEntries(
         node: DictionaryNode,
         flags: EvalFlags,
         inferenceContext: InferenceContext | undefined
@@ -25287,6 +25314,11 @@ export function createTypeEvaluator(
                             if (TypeBase.isInstance(type) && !isConstant && !isExplicitTypeAliasDeclaration(decl)) {
                                 type = stripTypeForm(stripLiteralValue(type));
                             }
+
+                            // The known entries of a dict are only what code flow analysis has
+                            // seen of it. Code outside that flow (another function or method,
+                            // another module) may change the dict, so they don't apply there.
+                            type = removeDictKnownEntries(type);
                         }
 
                         typesToCombine.push(type);
@@ -27157,8 +27189,11 @@ export function createTypeEvaluator(
                 }
 
                 // A frozendict with known entries accepts only a frozendict with
-                // exactly those keys, each with an assignable value type.
-                const destFrozenDictEntries = destType.priv.knownEntries;
+                // exactly those keys, each with an assignable value type. (A dict's
+                // known entries don't restrict what can be assigned to it.)
+                const destFrozenDictEntries = ClassType.hasExactKnownEntries(destType)
+                    ? destType.priv.knownEntries
+                    : undefined;
                 if (destFrozenDictEntries) {
                     const srcFrozenDictEntries = concreteSrcType.priv.knownEntries;
                     for (const key of srcFrozenDictEntries?.keys() ?? []) {

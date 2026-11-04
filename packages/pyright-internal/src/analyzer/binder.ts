@@ -100,6 +100,7 @@ import {
     FlowVariableAnnotation,
     FlowWildcardImport,
     createKeyForReference,
+    dictMutatorMethodNames,
     getUniqueFlowNodeId,
     isCodeFlowSupportedForReference,
     wildcardImportReferenceKey,
@@ -883,6 +884,16 @@ export class Binder extends ParseTreeWalker {
                 this.walk(argNode);
             });
         });
+
+        // A call like x.update(...) may change the keys of a dict x, so the code flow
+        // analysis of x must see its call flow node.
+        if (
+            node.d.leftExpr.nodeType === ParseNodeType.MemberAccess &&
+            dictMutatorMethodNames.has(node.d.leftExpr.d.member.d.value) &&
+            isCodeFlowSupportedForReference(node.d.leftExpr.d.leftExpr)
+        ) {
+            this._currentScopeCodeFlowExpressions!.add(createKeyForReference(node.d.leftExpr.d.leftExpr));
+        }
 
         // Create a call flow node. We'll skip this if the call is part of
         // a decorator. We assume that decorators are not NoReturn functions.
@@ -3596,7 +3607,23 @@ export class Binder extends ParseTreeWalker {
             }
 
             case ParseNodeType.Index: {
+                // A write to (or deletion of) x[...] may change the keys of a dict x, so
+                // the code flow analysis of x must see it, even when the index isn't a
+                // literal (and x[...] itself isn't a supported reference).
+                const isIndexWrite =
+                    isCodeFlowSupportedForReference(target.d.leftExpr) && !isCodeFlowSupportedForReference(target);
+                if (isCodeFlowSupportedForReference(target.d.leftExpr)) {
+                    this._currentScopeCodeFlowExpressions!.add(createKeyForReference(target.d.leftExpr));
+                }
+
+                if (isIndexWrite && !unbound) {
+                    this._createFlowIndexWrite(target, unbound);
+                }
                 this._createFlowAssignment(target, unbound);
+                if (isIndexWrite && unbound) {
+                    this._createFlowIndexWrite(target, unbound);
+                }
+
                 if (walkTargets) {
                     this.walk(target);
                 }
@@ -3708,6 +3735,23 @@ export class Binder extends ParseTreeWalker {
         // Otherwise, the node will be evaluated as unbound at this point in the flow.
         if (!unbound || this._nodeInfo.getFlowNode(node) === undefined) {
             this._nodeInfo.setFlowNode(node, unbound ? prevFlowNode : this._currentFlowNode!);
+        }
+    }
+
+    // Creates an assignment flow node for a write to (or deletion of) x[...] where the
+    // index isn't a literal, so that code flow analysis of x can account for it. No
+    // narrowing applies to the target expression itself.
+    private _createFlowIndexWrite(node: IndexNode, unbound: boolean) {
+        if (!this._isCodeUnreachable()) {
+            const flowNode: FlowAssignment = {
+                flags: unbound ? FlowFlags.Assignment | FlowFlags.Unbind : FlowFlags.Assignment,
+                id: this._getUniqueFlowNodeId(),
+                node: node as CodeFlowReferenceExpressionNode,
+                antecedent: this._currentFlowNode!,
+                targetSymbolId: indeterminateSymbolId,
+            };
+
+            this._currentFlowNode = flowNode;
         }
     }
 

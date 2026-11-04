@@ -1760,6 +1760,10 @@
             "message": "Expected unpacked TypeVarTuple; use Unpack[{name1}] or *{name2}",
             "comment": "{Locked='TypeVarTuple','Unpack[{name1}]','*{name2}'}"
         },
+        "unpackedDictArgument": {
+            "message": "Unable to match unpacked dict argument to parameters",
+            "comment": "{Locked='dict'}"
+        },
         "unpackedFrozenDictArgument": {
             "message": "Unable to match unpacked frozendict argument to parameters",
             "comment": "{Locked='frozendict'}"

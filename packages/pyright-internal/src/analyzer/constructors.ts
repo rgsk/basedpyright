@@ -20,7 +20,7 @@ import { ConstraintSolution } from './constraintSolution';
 import { addConstraintsForExpectedType } from './constraintSolver';
 import { ConstraintTracker } from './constraintTracker';
 import { applyConstructorTransform, hasConstructorTransform } from './constructorTransform';
-import { applyFrozenDictEntries, isFrozenDictClass } from './frozenDicts';
+import { applyFrozenDictEntries, isKnownEntriesClass } from './frozenDicts';
 import { Arg, CallResult, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import {
     ClassType,
@@ -238,12 +238,12 @@ export function validateConstructorArgs(
         });
     }
 
-    // Record the entries of a frozendict constructed with literal keys.
+    // Record the entries of a frozendict or dict constructed with literal keys.
     if (
         returnResult.returnType &&
         !returnResult.argumentErrors &&
         !returnResult.isTypeIncomplete &&
-        isFrozenDictClass(type)
+        isKnownEntriesClass(type)
     ) {
         returnResult.returnType = applyFrozenDictEntries(
             evaluator,

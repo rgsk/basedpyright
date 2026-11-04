@@ -167,6 +167,10 @@ export interface FlowPostContextManagerLabel extends FlowLabel {
     blockIfSwallowsExceptions: boolean;
 }
 
+// The methods of dict that add, replace or remove keys. Code flow analysis applies
+// a call to one of them to the known entries of the dict it's called on.
+export const dictMutatorMethodNames = new Set(['update', 'pop', 'popitem', 'clear', 'setdefault']);
+
 export function isCodeFlowSupportedForReference(
     reference: ExpressionNode
 ): reference is CodeFlowReferenceExpressionNode {

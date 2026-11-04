@@ -14,12 +14,13 @@
 import { ConsoleInterface } from '../common/console';
 import { assert, fail } from '../common/debug';
 import { convertOffsetToPosition } from '../common/positionUtils';
-import { ArgCategory, ExpressionNode, ParseNode, ParseNodeType } from '../parser/parseNodes';
+import { ArgCategory, ExpressionNode, ParseNode, ParseNodeType, StringListNode } from '../parser/parseNodes';
 import { AnalyzerNodeInfoAccessor } from './analyzerNodeInfo';
 import {
     CodeFlowReferenceExpressionNode,
     createKeyForReference,
     createKeysForReferenceSubexpressions,
+    dictMutatorMethodNames,
     FlowAssignment,
     FlowBranchLabel,
     FlowCall,
@@ -36,6 +37,14 @@ import {
     FlowWildcardImport,
 } from './codeFlowTypes';
 import { formatControlFlowGraph } from './codeFlowUtils';
+import {
+    applyDictIndexWrite,
+    applyDictMutatorCall,
+    getDictValueTypeArg,
+    getLiteralKeyOfIndex,
+    hasDictWithKnownEntries,
+    isDictKeyChangedByMutatorCall,
+} from './frozenDicts';
 import { getBoundCallMethod, getBoundNewMethod } from './constructors';
 import { DeclarationType } from './declaration';
 import { isMatchingExpression, isPartialMatchingExpression, printExpression } from './parseTreeUtils';
@@ -75,6 +84,7 @@ import {
     doForEachSubtype,
     isIncompleteUnknown,
     isTypeAliasPlaceholder,
+    makeInferenceContext,
     mapSubtypes,
 } from './typeUtils';
 
@@ -444,6 +454,48 @@ export function getCodeFlowEngine(
                 });
             }
 
+            // Applies the write (or deletion) of an assignment flow node whose target is an
+            // index expression to the known entries of a dict.
+            function applyDictIndexWriteForFlowNode(type: Type, flowNode: FlowAssignment): Type {
+                if (!hasDictWithKnownEntries(type)) {
+                    return type;
+                }
+
+                const targetNode = flowNode.node;
+                assert(targetNode.nodeType === ParseNodeType.Index);
+                const key = getLiteralKeyOfIndex(evaluator, targetNode);
+                if (flowNode.flags & FlowFlags.Unbind || key === undefined) {
+                    return applyDictIndexWrite(evaluator, type, key, /* assignedType */ undefined);
+                }
+
+                // The assigned value's type. Don't evaluate the assignment statement for a
+                // plain assignment: its target refers to this flow node. Evaluate its value
+                // speculatively instead, expecting the dict's value type as __setitem__
+                // does, so the cached type of the value isn't changed.
+                let assignedType: Type | undefined;
+                const parentNode = targetNode.parent;
+                if (parentNode?.nodeType === ParseNodeType.Assignment && parentNode.d.leftExpr === targetNode) {
+                    const valueExpr = parentNode.d.rightExpr;
+                    const expectedValueType = getDictValueTypeArg(type);
+                    assignedType = evaluator.useSpeculativeMode(valueExpr, () =>
+                        evaluator.getTypeOfExpression(
+                            valueExpr,
+                            EvalFlags.None,
+                            expectedValueType ? makeInferenceContext(expectedValueType) : undefined
+                        )
+                    ).type;
+                } else if (
+                    parentNode?.nodeType === ParseNodeType.AugmentedAssignment &&
+                    parentNode.d.destExpr === targetNode
+                ) {
+                    assignedType = evaluateAssignmentFlowNode(flowNode)?.type;
+                }
+
+                // Otherwise (as in "for x['key'] in ..."), the key's value is unknown: its
+                // entry is removed, so reads fall back to the dict's value type.
+                return applyDictIndexWrite(evaluator, type, key, assignedType, /* isUnknownValue */ !assignedType);
+            }
+
             function preventRecursion<T>(flowNode: FlowNode, callback: () => T): T {
                 flowNodeTypeCache.pendingNodes.add(flowNode.id);
 
@@ -518,6 +570,55 @@ export function getCodeFlowEngine(
                             return setCacheEntry(curFlowNode, /* type */ undefined, /* isIncomplete */ false);
                         }
 
+                        // Is this a call like x.update(...) that changes the keys of a dict?
+                        const callNode = callFlowNode.node;
+                        if (
+                            reference &&
+                            callNode.d.leftExpr.nodeType === ParseNodeType.MemberAccess &&
+                            dictMutatorMethodNames.has(callNode.d.leftExpr.d.member.d.value)
+                        ) {
+                            const receiverNode = callNode.d.leftExpr.d.leftExpr;
+
+                            // Apply it to the known entries of a dict.
+                            if (isMatchingExpression(reference, receiverNode)) {
+                                const mutatedResult = preventRecursion(curFlowNode, () => {
+                                    const flowTypeResult = getTypeFromFlowNode(callFlowNode.antecedent);
+                                    if (flowTypeResult.type) {
+                                        flowTypeResult.type = applyDictMutatorCall(
+                                            evaluator,
+                                            flowTypeResult.type,
+                                            callNode
+                                        );
+                                    }
+                                    return flowTypeResult;
+                                });
+
+                                return setCacheEntry(
+                                    curFlowNode,
+                                    mutatedResult.type,
+                                    !!mutatedResult.isIncomplete
+                                );
+                            }
+
+                            // A type narrowed for x['key'] no longer applies if the call
+                            // may have changed the key's value.
+                            if (
+                                reference.nodeType === ParseNodeType.Index &&
+                                reference.d.items.length === 1 &&
+                                reference.d.items[0].d.valueExpr.nodeType === ParseNodeType.StringList &&
+                                isMatchingExpression(reference.d.leftExpr, receiverNode) &&
+                                isDictKeyChangedByMutatorCall(
+                                    callNode,
+                                    reference.d.items[0].d.valueExpr.d.strings.map((s) => s.d.value).join('')
+                                )
+                            ) {
+                                return FlowNodeTypeResult.create(
+                                    options?.typeAtStart?.type,
+                                    !!options?.typeAtStart?.isIncomplete
+                                );
+                            }
+                        }
+
                         curFlowNode = callFlowNode.antecedent;
                         continue;
                     }
@@ -575,14 +676,14 @@ export function getCodeFlowEngine(
                                 return setCacheEntry(curFlowNode, flowTypeResult?.type, !!flowTypeResult?.isIncomplete);
                             }
 
-                            // Is this a simple assignment to an index expression? If so, it could
-                            // be assigning to a TypedDict, which requires narrowing of the expression's
-                            // base type.
+                            // Is this an assignment to (or deletion of) an index expression? If so,
+                            // it could be assigning to a TypedDict, which requires narrowing of the
+                            // expression's base type, or changing the known entries of a dict.
                             if (
                                 targetNode.nodeType === ParseNodeType.Index &&
                                 isMatchingExpression(reference, targetNode.d.leftExpr)
                             ) {
-                                if (
+                                const isTypedDictKeyAssignment =
                                     targetNode.parent?.nodeType === ParseNodeType.Assignment &&
                                     targetNode.d.items.length === 1 &&
                                     !targetNode.d.trailingComma &&
@@ -590,13 +691,16 @@ export function getCodeFlowEngine(
                                     targetNode.d.items[0].d.argCategory === ArgCategory.Simple &&
                                     targetNode.d.items[0].d.valueExpr.nodeType === ParseNodeType.StringList &&
                                     targetNode.d.items[0].d.valueExpr.d.strings.length === 1 &&
-                                    targetNode.d.items[0].d.valueExpr.d.strings[0].nodeType === ParseNodeType.String
-                                ) {
-                                    const keyValue = targetNode.d.items[0].d.valueExpr.d.strings[0].d.value;
-                                    const narrowedResult = preventRecursion(assignmentFlowNode, () => {
-                                        const flowTypeResult = getTypeFromFlowNode(assignmentFlowNode.antecedent);
+                                    targetNode.d.items[0].d.valueExpr.d.strings[0].nodeType === ParseNodeType.String;
 
-                                        if (flowTypeResult.type) {
+                                const narrowedResult = preventRecursion(assignmentFlowNode, () => {
+                                    const flowTypeResult = getTypeFromFlowNode(assignmentFlowNode.antecedent);
+
+                                    if (flowTypeResult.type) {
+                                        if (isTypedDictKeyAssignment) {
+                                            const keyValue = (
+                                                targetNode.d.items[0].d.valueExpr as StringListNode
+                                            ).d.strings[0].d.value;
                                             flowTypeResult.type = mapSubtypes(flowTypeResult.type, (subtype) => {
                                                 if (isClass(subtype) && ClassType.isTypedDictClass(subtype)) {
                                                     return narrowForKeyAssignment(subtype, keyValue);
@@ -605,15 +709,20 @@ export function getCodeFlowEngine(
                                             });
                                         }
 
-                                        return flowTypeResult;
-                                    });
+                                        flowTypeResult.type = applyDictIndexWriteForFlowNode(
+                                            flowTypeResult.type,
+                                            assignmentFlowNode
+                                        );
+                                    }
 
-                                    return setCacheEntry(
-                                        curFlowNode,
-                                        narrowedResult?.type,
-                                        !!narrowedResult?.isIncomplete
-                                    );
-                                }
+                                    return flowTypeResult;
+                                });
+
+                                return setCacheEntry(
+                                    curFlowNode,
+                                    narrowedResult?.type,
+                                    !!narrowedResult?.isIncomplete
+                                );
                             }
 
                             if (isPartialMatchingExpression(reference, targetNode)) {

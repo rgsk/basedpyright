@@ -964,6 +964,16 @@ export namespace ClassType {
     ): ClassType {
         const newClassType = TypeBase.cloneType(classType);
 
+        // A dict used as a type argument (as in list[dict[str, int]]) can be changed
+        // through the object that holds it, which code flow analysis doesn't follow,
+        // so its known entries don't apply there.
+        if (typeArgs?.some(hasDictKnownEntries)) {
+            typeArgs = typeArgs.map(removeDictKnownEntriesFromTypeArg);
+        }
+        if (tupleTypeArgs?.some((arg) => hasDictKnownEntries(arg.type))) {
+            tupleTypeArgs = tupleTypeArgs.map((arg) => ({ ...arg, type: removeDictKnownEntriesFromTypeArg(arg.type) }));
+        }
+
         newClassType.priv.typeArgs = typeArgs?.length === 0 ? undefined : typeArgs;
 
         // If the user passed undefined for this argument, infer it
@@ -985,6 +995,38 @@ export namespace ClassType {
         }
 
         return newClassType;
+    }
+
+    function isDictWithKnownEntries(type: Type): type is ClassType {
+        return (
+            type.category === TypeCategory.Class &&
+            !!type.priv.knownEntries &&
+            TypeBase.isInstance(type) &&
+            !hasExactKnownEntries(type)
+        );
+    }
+
+    function hasDictKnownEntries(type: Type): boolean {
+        return (
+            isDictWithKnownEntries(type) ||
+            (type.category === TypeCategory.Union && type.priv.subtypes.some(isDictWithKnownEntries))
+        );
+    }
+
+    function removeDictKnownEntriesFromTypeArg(type: Type): Type {
+        if (isDictWithKnownEntries(type)) {
+            return cloneForKnownEntries(type, undefined);
+        }
+
+        if (type.category === TypeCategory.Union && type.priv.subtypes.some(isDictWithKnownEntries)) {
+            return combineTypes(
+                type.priv.subtypes.map((subtype) =>
+                    isDictWithKnownEntries(subtype) ? cloneForKnownEntries(subtype, undefined) : subtype
+                )
+            );
+        }
+
+        return type;
     }
 
     export function cloneIncludeSubclasses(classType: ClassType, includeSubclasses = true) {
@@ -1037,7 +1079,13 @@ export namespace ClassType {
         return newClassType;
     }
 
-    // Determines whether two frozendict instances have the same known entries.
+    // Whether the known entries of an instance are exact (a frozendict, which can't
+    // change) rather than what the checker has seen of a dict so far.
+    export function hasExactKnownEntries(classType: ClassType): boolean {
+        return !!classType.priv.knownEntries && !ClassType.isBuiltIn(classType, 'dict');
+    }
+
+    // Determines whether two instances have the same known entries.
     export function isKnownEntriesSame(
         type1: ClassType,
         type2: ClassType,
@@ -3532,8 +3580,8 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
             // values (they're compared below), so their value type arguments needn't match.
             const compareFrozenDictEntriesOnly =
                 !options.ignoreKnownEntries &&
-                !!type1.priv.knownEntries &&
-                !!classType2.priv.knownEntries;
+                ClassType.hasExactKnownEntries(type1) &&
+                ClassType.hasExactKnownEntries(classType2);
 
             if (
                 (!options.ignorePseudoGeneric || !ClassType.isPseudoGenericClass(type1)) &&
@@ -4187,6 +4235,22 @@ function _addTypeIfUnique(unionType: UnionType, typeToAdd: UnionableType, elideR
                     unionType.priv.subtypes[i] = typeToAdd;
                     return;
                 } else if (!type.priv.knownEntries) {
+                    return;
+                }
+
+                // Two dicts with different known entries (as after an if statement that
+                // writes to the dict in one branch) are one dict that has the keys known
+                // in both, each with the value types from both.
+                if (!ClassType.hasExactKnownEntries(type) && !ClassType.hasExactKnownEntries(typeToAdd)) {
+                    const entriesToAdd = typeToAdd.priv.knownEntries;
+                    const mergedEntries = new Map<string, Type>();
+                    type.priv.knownEntries.forEach((entryType, key) => {
+                        const entryTypeToAdd = entriesToAdd.get(key);
+                        if (entryTypeToAdd) {
+                            mergedEntries.set(key, combineTypes([entryType, entryTypeToAdd]));
+                        }
+                    });
+                    unionType.priv.subtypes[i] = ClassType.cloneForKnownEntries(type, mergedEntries);
                     return;
                 }
             }
