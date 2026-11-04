@@ -149,3 +149,18 @@ def merging(plain: frozendict[str, int]) -> None:
     assert_type(frozendict(plain, extra=1), frozendict[str, int])
     # a dict on the left makes a dict
     assert_type({"epochs": 20} | defaults, dict[str, int | float])
+
+
+# The keys are always present: .get of a known key is its value type, and .get of
+# another key is the default (no error: it doesn't fail at runtime).
+def get_and_copy(key: Literal["name", "age"], any_key: str, flag: bool) -> None:
+    user = frozendict(name="rahul", age=27)
+    assert_type(user.get("age"), int)
+    assert_type(user.get("age", 0), int)
+    assert_type(user.get("nme"), None)
+    assert_type(user.get("nme", "x"), str)
+    assert_type(user.get(key), str | int)
+    assert_type(user.get(any_key), str | int | None)
+    assert_type(user.copy(), frozendict[{"name": str, "age": int}])
+    either = frozendict(a=1) if flag else frozendict(b="x")
+    assert_type(either.get("a"), int | None)

@@ -158,7 +158,12 @@ import {
     isEnumClassWithMembers,
     isEnumMetaclass,
 } from './enums';
-import { getFrozenDictEntriesFromTypeArg, getTypeOfIndexedFrozenDict, isFrozenDictClass } from './frozenDicts';
+import {
+    applyFrozenDictMethodCall,
+    getFrozenDictEntriesFromTypeArg,
+    getTypeOfIndexedFrozenDict,
+    isFrozenDictClass,
+} from './frozenDicts';
 import { applyFunctionTransform } from './functionTransform';
 import { createNamedTupleType } from './namedTuples';
 import {
@@ -9323,6 +9328,7 @@ export function createTypeEvaluator(
                     typeResult.typeErrors = true;
                 } else {
                     typeResult.overloadsUsedForCall = callResult.overloadsUsedForCall;
+                    typeResult.type = applyFrozenDictMethodCall(evaluatorInterface, node, typeResult.type);
                 }
 
                 if (callResult.isTypeIncomplete) {

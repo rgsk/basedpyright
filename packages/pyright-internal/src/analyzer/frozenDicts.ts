@@ -12,9 +12,9 @@
 import { DiagnosticAddendum } from '../common/diagnostic';
 import { DiagnosticRule } from '../common/diagnosticRules';
 import { LocAddendum, LocMessage } from '../localization/localize';
-import { ArgCategory, DictionaryNode, ExpressionNode, IndexNode, ParseNodeType } from '../parser/parseNodes';
+import { ArgCategory, CallNode, DictionaryNode, ExpressionNode, IndexNode, ParseNodeType } from '../parser/parseNodes';
 import { Arg, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
-import { ClassType, isClassInstance, Type, UnknownType } from './types';
+import { ClassType, combineTypes, isClassInstance, Type, UnknownType } from './types';
 import { convertToInstance, doForEachSubtype, isTupleClass, mapSubtypes, specializeTupleClass } from './typeUtils';
 
 export function isFrozenDictClass(classType: ClassType): boolean {
@@ -330,4 +330,76 @@ export function getFrozenDictEntriesFromTypeArg(evaluator: TypeEvaluator, node: 
     });
 
     return entries;
+}
+
+// Called with the result of x.get(...) or x.copy() when x is a frozendict with
+// known entries (or a union of them), whose keys are always present:
+// - x.copy() is x itself at runtime, so it has the same entries;
+// - x.get('key') is the key's value type, as the default is never used;
+// - x.get('missing') is the default (None without one), with no error, since
+//   it doesn't fail at runtime.
+// Other calls, such as x.get(key) with a key that isn't a literal, keep their type.
+export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNode, returnType: Type): Type {
+    const memberAccess = node.d.leftExpr;
+    if (memberAccess.nodeType !== ParseNodeType.MemberAccess) {
+        return returnType;
+    }
+
+    const methodName = memberAccess.d.member.d.value;
+    if (methodName !== 'get' && methodName !== 'copy') {
+        return returnType;
+    }
+
+    const receiverType = evaluator.getTypeOfExpression(memberAccess.d.leftExpr).type;
+    let allHaveEntries = true;
+    doForEachSubtype(receiverType, (subtype) => {
+        if (!isClassInstance(subtype) || !isFrozenDictClass(subtype) || !subtype.priv.frozenDictEntries) {
+            allHaveEntries = false;
+        }
+    });
+    if (!allHaveEntries) {
+        return returnType;
+    }
+
+    const args = node.d.args;
+    if (args.some((arg) => arg.d.name || arg.d.argCategory !== ArgCategory.Simple)) {
+        return returnType;
+    }
+
+    if (methodName === 'copy') {
+        return args.length === 0 ? receiverType : returnType;
+    }
+
+    if (args.length !== 1 && args.length !== 2) {
+        return returnType;
+    }
+
+    const keys: string[] = [];
+    let isLiteralKey = true;
+    doForEachSubtype(evaluator.getTypeOfExpression(args[0].d.valueExpr).type, (subtype) => {
+        if (
+            isClassInstance(subtype) &&
+            ClassType.isBuiltIn(subtype, 'str') &&
+            typeof subtype.priv.literalValue === 'string'
+        ) {
+            keys.push(subtype.priv.literalValue);
+        } else {
+            isLiteralKey = false;
+        }
+    });
+    if (!isLiteralKey || keys.length === 0) {
+        return returnType;
+    }
+
+    const defaultType =
+        args.length === 2
+            ? evaluator.stripLiteralValue(evaluator.getTypeOfExpression(args[1].d.valueExpr).type)
+            : evaluator.getNoneType();
+
+    const resultTypes: Type[] = [];
+    doForEachSubtype(receiverType, (subtype) => {
+        const entries = (subtype as ClassType).priv.frozenDictEntries!;
+        keys.forEach((key) => resultTypes.push(entries.get(key) ?? defaultType));
+    });
+    return combineTypes(resultTypes);
 }
