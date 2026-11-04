@@ -31,6 +31,8 @@ import {
     ClassType,
     Type,
     TypeCategory,
+    UnknownType,
+    combineTypes,
     getTypeAliasInfo,
     isAnyOrUnknown,
     isClassInstance,
@@ -48,7 +50,15 @@ import { convertOffsetToPosition, convertPositionToOffset } from '../common/posi
 import { ServiceProvider } from '../common/serviceProvider';
 import { Position, Range, TextRange } from '../common/textRange';
 import { Uri } from '../common/uri/uri';
-import { ExpressionNode, FunctionNode, NameNode, ParseNode, ParseNodeType, StringNode } from '../parser/parseNodes';
+import {
+    ExpressionNode,
+    FunctionNode,
+    IndexNode,
+    NameNode,
+    ParseNode,
+    ParseNodeType,
+    StringNode,
+} from '../parser/parseNodes';
 import { getArgumentNode, getInfoNode, improveNodeByOffset, isLiteralNode, nodeRange } from '../parser/parseNodeUtils';
 import { ParseFileResults } from '../parser/parser';
 import { TokenType } from '../parser/tokenizerTypes';
@@ -431,8 +441,15 @@ export class HoverProvider {
                         argumentNode !== undefined
                     );
                     if (isBaseLiteral && !isTypedDictItem) {
-                        // no hover message for literals unless they reference TypedDict keys
-                        return null;
+                        // no hover message for literals unless they reference TypedDict keys,
+                        // or the known keys of a frozendict
+                        if (
+                            infoNode.nodeType !== ParseNodeType.Index ||
+                            !this._tryAddPartsForFrozenDictKey(infoNode, parts)
+                        ) {
+                            return null;
+                        }
+                        rangeOverride = argumentNode;
                     }
                     if (isTypedDictItem) {
                         rangeOverride = argumentNode;
@@ -682,6 +699,44 @@ export class HoverProvider {
         };
 
         return forEachDeclaration(typeResult, handleDeclaration, isArgument);
+    }
+
+    // For the literal key of user['name'], where user is a frozendict with known
+    // entries, shows the key's value type, as for the key of a TypedDict.
+    private _tryAddPartsForFrozenDictKey(node: IndexNode, parts: HoverTextPart[]): boolean {
+        if (node.d.items.length !== 1 || node.d.items[0].d.name) {
+            return false;
+        }
+
+        const keyType = this._evaluator.getType(node.d.items[0].d.valueExpr);
+        if (
+            !keyType ||
+            !isClassInstance(keyType) ||
+            !ClassType.isBuiltIn(keyType, 'str') ||
+            typeof keyType.priv.literalValue !== 'string'
+        ) {
+            return false;
+        }
+        const key = keyType.priv.literalValue;
+
+        const entryTypes: Type[] = [];
+        doForEachSubtype(this._evaluator.getType(node.d.leftExpr) ?? UnknownType.create(), (subtype) => {
+            const entryType = isClassInstance(subtype) ? subtype.priv.frozenDictEntries?.get(key) : undefined;
+            if (entryType) {
+                entryTypes.push(entryType);
+            }
+        });
+        if (entryTypes.length === 0) {
+            return false;
+        }
+
+        parts.length = 0;
+        this._addResultsPart(
+            parts,
+            `(key) ${key}: ${this._evaluator.printType(combineTypes(entryTypes))}`,
+            /* python */ true
+        );
+        return true;
     }
 
     private _addResultsForSynthesizedType(parts: HoverTextPart[], typeInfo: SynthesizedTypeInfo, hoverNode: NameNode) {

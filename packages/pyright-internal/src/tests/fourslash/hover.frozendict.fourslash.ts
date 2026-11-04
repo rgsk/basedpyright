@@ -27,6 +27,12 @@
 ////     return frozendict(name="a", age=1)
 ////
 //// [|/*marker9*/loaded|] = load()
+////
+//// user[[|/*marker10*/"name"|]]
+//// headers[[|/*marker11*/"content-type"|]]
+//// user[[|/*marker12*/"nme"|]]
+//// either[[|/*marker13*/"a"|]]
+//// plain[[|/*marker14*/"a"|]]
 
 helper.verifyHover('markdown', {
     marker1: "```python\n(variable) user: frozendict[{'name': str, 'age': int}]\n```",
@@ -38,4 +44,9 @@ helper.verifyHover('markdown', {
     marker7: '```python\n(function) def make_declared() -> frozendict[str, str | int]\n```',
     marker8: '```python\n(function) def load() -> User\n```',
     marker9: '```python\n(variable) loaded: User\n```',
+    marker10: '```python\n(key) name: str\n```',
+    marker11: '```python\n(key) content-type: str\n```',
+    marker12: null,
+    marker13: '```python\n(key) a: int\n```',
+    marker14: null,
 });
