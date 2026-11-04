@@ -14,7 +14,7 @@ import { DiagnosticRule } from '../common/diagnosticRules';
 import { LocAddendum, LocMessage } from '../localization/localize';
 import { ArgCategory, CallNode, DictionaryNode, ExpressionNode, IndexNode, ParseNodeType } from '../parser/parseNodes';
 import { Arg, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
-import { ClassType, combineTypes, isClassInstance, Type, UnknownType } from './types';
+import { ClassType, combineTypes, isClassInstance, isInstantiableClass, Type, UnknownType } from './types';
 import { convertToInstance, doForEachSubtype, isTupleClass, mapSubtypes, specializeTupleClass } from './typeUtils';
 
 export function isFrozenDictClass(classType: ClassType): boolean {
@@ -363,6 +363,11 @@ export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNo
     }
 
     const methodName = memberAccess.d.member.d.value;
+    if (methodName === 'fromkeys') {
+        const classType = evaluator.getTypeOfExpression(memberAccess.d.leftExpr).type;
+        return applyFrozenDictFromKeys(evaluator, node, classType, returnType);
+    }
+
     if (methodName !== 'get' && methodName !== 'copy') {
         return returnType;
     }
@@ -476,4 +481,50 @@ function isLiteralNeeded(
         }
     });
     return isNeeded;
+}
+
+// frozendict.fromkeys(['a', 'b'], value): each key gets the value's type (None
+// without a value). The keys must be string literals in a list or tuple display,
+// so that their order is known. The type arguments are left as they are.
+function applyFrozenDictFromKeys(evaluator: TypeEvaluator, node: CallNode, classType: Type, returnType: Type): Type {
+    if (!isInstantiableClass(classType) || !isFrozenDictClass(classType)) {
+        return returnType;
+    }
+    if (!isClassInstance(returnType) || !isFrozenDictClass(returnType)) {
+        return returnType;
+    }
+
+    const args = node.d.args;
+    if (
+        args.length < 1 ||
+        args.length > 2 ||
+        args.some((arg) => arg.d.name || arg.d.argCategory !== ArgCategory.Simple)
+    ) {
+        return returnType;
+    }
+
+    const keysExpr = args[0].d.valueExpr;
+    if (keysExpr.nodeType !== ParseNodeType.List && keysExpr.nodeType !== ParseNodeType.Tuple) {
+        return returnType;
+    }
+
+    const valueType = args.length === 2 ? returnType.priv.typeArgs?.[1] : evaluator.getNoneType();
+    if (!valueType) {
+        return returnType;
+    }
+
+    const entries = new Map<string, Type>();
+    for (const keyExpr of keysExpr.d.items) {
+        const keyType = evaluator.getTypeOfExpression(keyExpr).type;
+        if (
+            !isClassInstance(keyType) ||
+            !ClassType.isBuiltIn(keyType, 'str') ||
+            typeof keyType.priv.literalValue !== 'string'
+        ) {
+            return returnType;
+        }
+        entries.set(keyType.priv.literalValue, valueType);
+    }
+
+    return entries.size > 0 ? ClassType.cloneForFrozenDictEntries(returnType, entries) : returnType;
 }

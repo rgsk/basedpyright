@@ -218,3 +218,16 @@ def building() -> None:
     assert_type(untagged, frozendict[{"kind": str}])
     wrong: Circle = frozendict(kind="square", radius=1.0)  # error
     print(wrong)
+
+
+# fromkeys with literal keys has known entries too.
+def from_keys(keys: list[str]) -> None:
+    assert_type(frozendict.fromkeys(["lr", "momentum"], 0.0), frozendict[{"lr": float, "momentum": float}])
+    assert_type(frozendict.fromkeys(("lr",)), frozendict[{"lr": None}])
+    assert_type(frozendict.fromkeys(keys, 1), frozendict[str, int])
+    # several keys sharing a default, merged into a known shape
+    user = frozendict(name="rahul", age=27)
+    assert_type(
+        frozendict(**user, **frozendict.fromkeys(["lr", "momentum"], 0.0)),
+        frozendict[{"name": str, "age": int, "lr": float, "momentum": float}],
+    )
