@@ -68,6 +68,7 @@ import {
     ListNode,
     MatchNode,
     MemberAccessNode,
+    ModuleNode,
     NameNode,
     NumberNode,
     ParamCategory,
@@ -161,6 +162,7 @@ import {
 import {
     applyDictDisplayEntries,
     applyFrozenDictMethodCall,
+    hasDictWithKnownEntries,
     removeDictKnownEntries,
     getTypeOfIndexedFrozenDict,
     isFrozenDictClass,
@@ -5391,6 +5393,12 @@ export function createTypeEvaluator(
                         type = outerScopeTypeResult.type;
                         typeAtStart = type;
                         isTypeAtStartIncomplete = !!outerScopeTypeResult.isIncomplete;
+                    } else {
+                        const earlierCellsType = getDictTypeAfterEarlierCells(node, symbolWithScope, effectiveType);
+                        if (earlierCellsType) {
+                            type = earlierCellsType;
+                            typeAtStart = type;
+                        }
                     }
                 }
 
@@ -5662,6 +5670,77 @@ export function createTypeEvaluator(
         }
 
         return type.props.specialForm;
+    }
+
+    // Handles a variable defined in an earlier notebook cell and read at the top level
+    // of a later one. The cells run in order, so a dict's known entries are those it
+    // has at the end of the cell before this one, with the writes of every cell in
+    // between applied (see the flow analysis of dict writes in codeFlowEngine). Only
+    // known entries carry over: other narrowing is dropped at a cell boundary, as in
+    // stock pyright, so the result is used only where it's the effective type with
+    // known entries.
+    function getDictTypeAfterEarlierCells(
+        node: NameNode,
+        symbolWithScope: SymbolWithScope,
+        effectiveType: Type
+    ): Type | undefined {
+        let hasDict = false;
+        doForEachSubtype(effectiveType, (subtype) => {
+            if (isClassInstance(subtype) && ClassType.isBuiltIn(subtype, 'dict')) {
+                hasDict = true;
+            }
+        });
+        if (!hasDict || symbolWithScope.usesGlobalBinding || symbolWithScope.usesNonlocalBinding) {
+            return undefined;
+        }
+
+        // Read at the top level of a cell: inside a function, it's a global read.
+        const executionNode = ParseTreeUtils.getExecutionScopeNode(node, nodeInfo);
+        if (executionNode.nodeType !== ParseNodeType.Module) {
+            return undefined;
+        }
+
+        // The cells from the one that defines the variable to the one before this.
+        const moduleNodes: ModuleNode[] = [];
+        let scope = nodeInfo.getScope(executionNode)?.parent;
+        while (scope?.type === ScopeType.Module && scope.moduleNode) {
+            moduleNodes.push(scope.moduleNode);
+            if (scope === symbolWithScope.scope) {
+                break;
+            }
+            scope = scope.parent;
+        }
+        if (scope !== symbolWithScope.scope) {
+            return undefined;
+        }
+        moduleNodes.reverse();
+
+        const referenceKey = createKeyForReference(node);
+        let typeAtStart: Type = symbolWithScope.symbol.isInitiallyUnbound() ? UnboundType.create() : effectiveType;
+        for (const moduleNode of moduleNodes) {
+            const flowNode = nodeInfo.getAfterFlowNode(moduleNode);
+            if (!flowNode || !nodeInfo.getCodeFlowExpressions(moduleNode)?.has(referenceKey)) {
+                continue;
+            }
+
+            const analyzer = getCodeFlowAnalyzerForNode(moduleNode, { type: typeAtStart });
+            const flowTypeResult = analyzer.getTypeFromCodeFlow(flowNode, node, {
+                targetSymbolId: symbolWithScope.symbol.id,
+                typeAtStart: { type: typeAtStart },
+            });
+            if (!flowTypeResult.type || flowTypeResult.isIncomplete) {
+                return undefined;
+            }
+            typeAtStart = flowTypeResult.type;
+        }
+
+        if (
+            !hasDictWithKnownEntries(typeAtStart) ||
+            !isTypeSame(removeDictKnownEntries(typeAtStart), effectiveType, { honorTypeForm: true })
+        ) {
+            return undefined;
+        }
+        return typeAtStart;
     }
 
     // Handles the case where a variable or parameter is defined in an outer

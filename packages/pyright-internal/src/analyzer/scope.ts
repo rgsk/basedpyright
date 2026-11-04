@@ -10,6 +10,7 @@
  */
 
 import { fail } from '../common/debug';
+import { ModuleNode } from '../parser/parseNodes';
 import { DeclarationType } from './declaration';
 import { Symbol, SymbolFlags, SymbolTable } from './symbol';
 
@@ -120,6 +121,10 @@ export class Scope {
     // Names defined by __slots__ within this scope (used only
     // for class scopes).
     slotsNames: string[] | undefined;
+
+    // For a module scope, the module's parse node. A notebook cell's module scope
+    // has the previous cell's module scope as its parent.
+    moduleNode: ModuleNode | undefined;
 
     // Indicates that __slots__ definitely contains at least one name,
     // even if the complete set of names is unknown.

@@ -386,6 +386,7 @@ export class Binder extends ParseTreeWalker {
             () => {
                 this._nodeInfo.setScope(node, this._currentScope);
                 this._nodeInfo.setFlowNode(node, this._currentFlowNode!);
+                this._currentScope.moduleNode = node;
 
                 // Bind implicit names.
                 // List taken from https://docs.python.org/3/reference/import.html#__name__

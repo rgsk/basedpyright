@@ -14,6 +14,7 @@ import { Program } from '../analyzer/program';
 import { AnalyzerService } from '../analyzer/service';
 import { IPythonMode } from '../analyzer/sourceFile';
 import { ConfigOptions } from '../common/configOptions';
+import { DiagnosticCategory } from '../common/diagnostic';
 import { NullConsole } from '../common/console';
 import { normalizeSlashes } from '../common/pathUtils';
 import { convertOffsetsToRange, convertOffsetToPosition } from '../common/positionUtils';
@@ -466,6 +467,92 @@ test('later chained-file globals with multiple files and mixed scopes', async ()
     );
 
     assert.strictEqual(diagnostics.length, 0);
+});
+
+test('dict known entries carry over to later cells', async () => {
+    const code = `
+// @filename: test1.py
+//// user = {"name": "rahul", "age": 27}
+//// user["joker"] = 1
+//// x = 1
+
+// @filename: test2.py
+//// user["age"] = "unknown"
+//// user.update(city="delhi")
+
+// @filename: test3.py
+//// reveal_type(user, expected_text="dict[{'name': str, 'age': str, 'joker': int, 'city': str}]")
+//// reveal_type(user["age"], expected_text="str")
+//// del user["joker"]
+//// reveal_type(user, expected_text="dict[{'name': str, 'age': str, 'city': str}]")
+
+// @filename: test4.py
+//// reveal_type(user, expected_text="dict[{'name': str, 'age': str, 'city': str}]")
+//// # Other narrowing isn't carried over, as in stock pyright.
+//// reveal_type(x, expected_text="int")
+//// # Inside a function, it's a global read: a plain dict.
+//// def f():
+////     reveal_type(user, expected_text="dict[str, str | int]")
+    `;
+
+    const basePath = UriEx.file(normalizeSlashes('/'));
+    const { data, service } = createServiceWithChainedSourceFiles(basePath, code);
+    service.test_program.configOptions.diagnosticRuleSet.strictDictionaryInference = true;
+    analyze(service.test_program);
+
+    for (const file of data.files) {
+        const parseResults = service.getParseResults(file.fileUri)!;
+        const diagnostics = await service.getDiagnosticsForRange(
+            file.fileUri,
+            convertOffsetsToRange(0, file.content.length, parseResults.tokenizerOutput.lines),
+            CancellationToken.None
+        );
+        assert.deepStrictEqual(
+            diagnostics.filter((d) => d.category === DiagnosticCategory.Error).map((d) => d.message),
+            [],
+            file.fileName
+        );
+    }
+});
+
+test('dict known entries complete in later cells', () => {
+    const code = `
+// @filename: test1.py
+//// user = dict(name="rahul", age=27)
+//// user["city"] = "delhi"
+
+// @filename: test2.py
+//// user[[|/*marker*/|]]
+    `;
+
+    const basePath = UriEx.file(normalizeSlashes('/'));
+    const { data, service } = createServiceWithChainedSourceFiles(basePath, code);
+    service.test_program.configOptions.autoImportCompletions = false;
+
+    const marker = data.markerPositions.get('marker')!;
+    const parseResult = service.getParseResults(marker.fileUri)!;
+    const result = new CompletionProvider(
+        service.test_program,
+        marker.fileUri,
+        convertOffsetToPosition(marker.position, parseResult.tokenizerOutput.lines),
+        {
+            format: MarkupKind.Markdown,
+            lazyEdit: false,
+            snippet: false,
+            checkDeprecatedWhenResolving: false,
+            useTypingExtensions: true,
+        },
+        CancellationToken.None,
+        false
+    ).getCompletions();
+
+    const labels = result?.items.map((i) => i.label) ?? [];
+    for (const key of ['name', 'age', 'city']) {
+        assert(
+            labels.includes(`'${key}'`) || labels.includes(`"${key}"`),
+            `${key} in ${JSON.stringify(labels.slice(0, 20))}`
+        );
+    }
 });
 
 function createServiceWithChainedSourceFiles(basePath: Uri, code: string) {
