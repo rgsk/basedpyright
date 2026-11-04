@@ -34,6 +34,7 @@ import { CodeFlowReferenceExpressionNode } from './codeFlowTypes';
 import { addConstraintsForExpectedType } from './constraintSolver';
 import { ConstraintTracker } from './constraintTracker';
 import { getTypeVarScopesForNode, isMatchingExpression } from './parseTreeUtils';
+import { getFrozenDictEntryTypeForKeys } from './frozenDicts';
 import { getTypedDictMembersForClass } from './typedDicts';
 import { EvalFlags, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import {
@@ -2090,7 +2091,8 @@ export function assignTypeToPatternTargets(
                             valueTypes.push(
                                 narrowTypeBasedOnPattern(
                                     evaluator,
-                                    mappingSubtypeInfo.dictTypeArgs.value,
+                                    getFrozenDictEntryTypeForKeys(mappingSubtypeInfo.subtype, keyType) ??
+                                        mappingSubtypeInfo.dictTypeArgs.value,
                                     mappingEntry.d.valuePattern,
                                     /* isPositiveTest */ true,
                                     nodeInfo

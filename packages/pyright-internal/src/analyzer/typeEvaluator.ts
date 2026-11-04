@@ -12885,13 +12885,28 @@ export function createTypeEvaluator(
 
                     if (isAnyOrUnknown(argType)) {
                         unpackedDictArgType = argType;
-                    } else if (isClassInstance(argType) && ClassType.isTypedDictClass(argType)) {
-                        // Handle the special case where it is a TypedDict and we know which
-                        // keys are present.
-                        const tdEntries = getTypedDictMembersForClass(evaluatorInterface, argType);
+                    } else if (
+                        isClassInstance(argType) &&
+                        (ClassType.isTypedDictClass(argType) || argType.priv.frozenDictEntries)
+                    ) {
+                        // Handle the special case where it is a TypedDict (or a frozendict
+                        // with known entries) and we know which keys are present.
+                        let knownItems: Map<string, Type>;
+                        let extraItemsType: Type;
+                        if (argType.priv.frozenDictEntries) {
+                            // The keys of a frozendict with known entries are exact.
+                            knownItems = argType.priv.frozenDictEntries;
+                            extraItemsType = NeverType.createNever();
+                        } else {
+                            const tdEntries = getTypedDictMembersForClass(evaluatorInterface, argType);
+                            knownItems = new Map(
+                                [...tdEntries.knownItems].map(([name, entry]) => [name, entry.valueType])
+                            );
+                            extraItemsType = tdEntries.extraItems?.valueType ?? getObjectType();
+                        }
                         const diag = new DiagnosticAddendum();
 
-                        tdEntries.knownItems.forEach((entry, name) => {
+                        knownItems.forEach((valueType, name) => {
                             const paramEntry = paramTracker.lookupName(name);
                             if (paramEntry) {
                                 if (paramEntry.argsReceived > 0) {
@@ -12911,7 +12926,7 @@ export function createTypeEvaluator(
                                         requiresTypeVarMatching: requiresSpecialization(paramType),
                                         argument: {
                                             argCategory: ArgCategory.Simple,
-                                            typeResult: { type: entry.valueType },
+                                            typeResult: { type: valueType },
                                         },
                                         errorNode: argList[argIndex].valueExpression ?? errorNode,
                                         paramName: name,
@@ -12925,7 +12940,7 @@ export function createTypeEvaluator(
                                     requiresTypeVarMatching: requiresSpecialization(paramType),
                                     argument: {
                                         argCategory: ArgCategory.Simple,
-                                        typeResult: { type: entry.valueType },
+                                        typeResult: { type: valueType },
                                     },
                                     errorNode: argList[argIndex].valueExpression ?? errorNode,
                                     paramName: name,
@@ -12944,7 +12959,6 @@ export function createTypeEvaluator(
                             }
                         });
 
-                        const extraItemsType = tdEntries.extraItems?.valueType ?? getObjectType();
                         if (!isNever(extraItemsType)) {
                             if (paramDetails.kwargsIndex !== undefined) {
                                 const kwargsParam = paramDetails.params[paramDetails.kwargsIndex];
@@ -12967,7 +12981,9 @@ export function createTypeEvaluator(
                             if (!canSkipDiagnosticForNode(errorNode) && !isTypeIncomplete) {
                                 addDiagnostic(
                                     DiagnosticRule.reportCallIssue,
-                                    LocMessage.unpackedTypedDictArgument() + diag.getString(),
+                                    (argType.priv.frozenDictEntries
+                                        ? LocMessage.unpackedFrozenDictArgument()
+                                        : LocMessage.unpackedTypedDictArgument()) + diag.getString(),
                                     argList[argIndex].valueExpression || errorNode
                                 );
                             }

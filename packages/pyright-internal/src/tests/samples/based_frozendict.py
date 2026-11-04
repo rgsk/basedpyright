@@ -2,7 +2,7 @@
 
 # A frozendict constructed with string literal keys remembers each key's value type.
 
-from typing import Literal, assert_type
+from typing import Literal, Never, assert_type
 
 
 def keyword_arguments() -> None:
@@ -164,3 +164,30 @@ def get_and_copy(key: Literal["name", "age"], any_key: str, flag: bool) -> None:
     assert_type(user.copy(), frozendict[{"name": str, "age": int}])
     either = frozendict(a=1) if flag else frozendict(b="x")
     assert_type(either.get("a"), int | None)
+
+
+# ** unpacking matches each known key to the parameter of the same name, as for a TypedDict.
+def greet(name: str, age: int) -> None: ...
+
+
+def greet_rest(name: str, **rest: int) -> None: ...
+
+
+def unpacking() -> None:
+    user = frozendict(name="rahul", age=27)
+    greet(**user)
+    greet(**frozendict(name="rahul"), age=27)
+    greet_rest(**frozendict(name="rahul", age=27, height=180))
+    greet(**frozendict(name="rahul"))  # error: "age" is missing
+    greet(**frozendict(name="rahul", age=27, city="delhi"))  # error: no parameter "city"
+    greet(**frozendict(name="rahul", age="27"))  # error: "age" is a str
+
+
+# The value of a mapping pattern has the key's type.
+def patterns() -> None:
+    user = frozendict(name="rahul", age=27)
+    match user:
+        case {"nme": missing}:
+            assert_type(missing, Never)
+        case {"age": age}:
+            assert_type(age, int)

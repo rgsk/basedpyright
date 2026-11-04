@@ -403,3 +403,33 @@ export function applyFrozenDictMethodCall(evaluator: TypeEvaluator, node: CallNo
     });
     return combineTypes(resultTypes);
 }
+
+// The value type of the given literal key(s) of a frozendict with known entries,
+// e.g. for the value of the mapping pattern {'age': v}. A key it doesn't have
+// can't match, so it contributes nothing. Returns undefined when the type has no
+// known entries or a key isn't a string literal.
+export function getFrozenDictEntryTypeForKeys(type: Type, keyType: Type): Type | undefined {
+    const entries = isClassInstance(type) ? type.priv.frozenDictEntries : undefined;
+    if (!entries) {
+        return undefined;
+    }
+
+    const entryTypes: Type[] = [];
+    let isLiteralKey = true;
+    doForEachSubtype(keyType, (keySubtype) => {
+        if (
+            isClassInstance(keySubtype) &&
+            ClassType.isBuiltIn(keySubtype, 'str') &&
+            typeof keySubtype.priv.literalValue === 'string'
+        ) {
+            const entryType = entries.get(keySubtype.priv.literalValue);
+            if (entryType) {
+                entryTypes.push(entryType);
+            }
+        } else {
+            isLiteralKey = false;
+        }
+    });
+
+    return isLiteralKey ? combineTypes(entryTypes) : undefined;
+}

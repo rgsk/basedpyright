@@ -380,6 +380,13 @@ test('frozendict with literal keys', () => {
                 code: DiagnosticRule.reportAssignmentType,
                 line: 131,
             },
+            { code: DiagnosticRule.reportCallIssue, line: 180, message: 'Argument missing for parameter "age"' },
+            {
+                code: DiagnosticRule.reportCallIssue,
+                line: 181,
+                message: expect.stringContaining('Unable to match unpacked frozendict argument to parameters'),
+            },
+            { code: DiagnosticRule.reportArgumentType, line: 182 },
         ],
     });
 });
