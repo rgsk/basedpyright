@@ -53,8 +53,8 @@ def without_known_entries(key: str, data: dict[str, int]) -> None:
     from_variable_key = frozendict({key: 1})
     assert_type(from_variable_key["anything"], int)
 
-    merged = user | {"extra": 1.5}
-    assert_type(merged["name"], str | int | float)
+    merged = user | data
+    assert_type(merged["name"], str | int)
 
 
 def branches(flag: bool) -> None:
@@ -131,3 +131,21 @@ def widened_entries() -> None:
     users = [user]
     still_invariant: list[frozendict[{"name": str, "age": int | None}]] = users
     print(optional_age, built, still_invariant)
+
+
+# Merging keeps the known entries when both sides have them; the right side wins.
+def merging(plain: frozendict[str, int]) -> None:
+    defaults = frozendict(lr=1e-3, epochs=10)
+    assert_type(defaults | frozendict(epochs="all"), frozendict[{"lr": float, "epochs": str}])
+    assert_type(defaults | {"batch": 32}, frozendict[{"lr": float, "epochs": int, "batch": int}])
+    assert_type(frozendict(defaults, epochs=20), frozendict[{"lr": float, "epochs": int}])
+    assert_type(frozendict({**defaults, "epochs": 20}), frozendict[{"lr": float, "epochs": int}])
+    assert_type(frozendict(**defaults, batch=32), frozendict[{"lr": float, "epochs": int, "batch": int}])
+    updated = defaults
+    updated |= {"epochs": 20}
+    assert_type(updated, frozendict[{"lr": float, "epochs": int}])
+    # without known entries on one side, there are none in the result
+    assert_type(defaults | plain, frozendict[str, float | int])
+    assert_type(frozendict(plain, extra=1), frozendict[str, int])
+    # a dict on the left makes a dict
+    assert_type({"epochs": 20} | defaults, dict[str, int | float])

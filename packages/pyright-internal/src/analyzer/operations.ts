@@ -24,6 +24,7 @@ import {
 import { OperatorType } from '../parser/tokenizerTypes';
 import { getInfoReader, AnalyzerNodeInfoAccessor } from './analyzerNodeInfo';
 import { getEnclosingLambda, isWithinLoop, operatorSupportsChaining, printOperator } from './parseTreeUtils';
+import { applyFrozenDictMerge } from './frozenDicts';
 import { getScopeForNode } from './scopeUtils';
 import { evaluateStaticBoolExpression } from './staticExpressions';
 import { EvalFlags, MagicMethodDeprecationInfo, AccessMethod, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
@@ -499,8 +500,13 @@ export function getTypeOfBinaryOperation(
         }
     }
 
+    let type = typeResult.type;
+    if (node.d.operator === OperatorType.BitwiseOr && !isIncomplete) {
+        type = applyFrozenDictMerge(evaluator, leftType, rightExpression, rightType, type);
+    }
+
     return {
-        type: typeResult.type,
+        type,
         isIncomplete,
         typeErrors,
         overloadsUsedForCall: typeResult.overloadsUsedForCall,
@@ -655,6 +661,10 @@ export function getTypeOfAugmentedAssignment(
                     node
                 );
             }
+        }
+
+        if (type && node.d.operator === OperatorType.BitwiseOrEqual && !isIncomplete) {
+            type = applyFrozenDictMerge(evaluator, leftType, node.d.rightExpr, rightType, type);
         }
 
         typeResult = { type, isIncomplete, overloadsUsedForCall, magicMethodDeprecationInfo: deprecatedInfo };

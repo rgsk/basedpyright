@@ -3523,7 +3523,17 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
                 return false;
             }
 
-            if (!options.ignorePseudoGeneric || !ClassType.isPseudoGenericClass(type1)) {
+            // The entries of two frozendicts with known entries say everything about their
+            // values (they're compared below), so their value type arguments needn't match.
+            const compareFrozenDictEntriesOnly =
+                !options.ignoreFrozenDictEntries &&
+                !!type1.priv.frozenDictEntries &&
+                !!classType2.priv.frozenDictEntries;
+
+            if (
+                (!options.ignorePseudoGeneric || !ClassType.isPseudoGenericClass(type1)) &&
+                !compareFrozenDictEntriesOnly
+            ) {
                 // Make sure the type args match.
                 const type1TupleTypeArgs = type1.priv.tupleTypeArgs;
                 const type2TupleTypeArgs = classType2.priv.tupleTypeArgs;

@@ -38,53 +38,151 @@ export function applyFrozenDictEntries(evaluator: TypeEvaluator, argList: Arg[],
     return entries ? ClassType.cloneForFrozenDictEntries(returnType, entries) : returnType;
 }
 
-// Supports keyword arguments, optionally preceded by a single dict display
-// whose keys are string literals: frozendict(a=1), frozendict({'a': 1}, b=2).
+// Where an entry's value comes from: an expression whose type is yet to be
+// evaluated (and widened), or the known entry of another frozendict.
+type EntrySource = { expr: ExpressionNode } | { type: Type };
+
+// Supports keyword arguments, optionally preceded by a single mapping, plus
+// **unpacking: frozendict(a=1), frozendict({'a': 1}, b=2), frozendict(other, b=2),
+// frozendict(**other, b=2). A dict display or a mapping must have known string keys:
+// literals, or the entries of another frozendict with known entries.
 function getEntriesFromArgs(evaluator: TypeEvaluator, argList: Arg[], valueType: Type): Map<string, Type> | undefined {
-    // A keyword argument that repeats a key of the dict display replaces its
-    // value but keeps its position, as at runtime. A Map does the same.
-    const valueExprs = new Map<string, ExpressionNode>();
+    // A later key replaces the value of an earlier one but keeps its position,
+    // as at runtime. A Map does the same.
+    const sources = new Map<string, EntrySource>();
 
     for (let i = 0; i < argList.length; i++) {
         const arg = argList[i];
-        if (arg.argCategory !== ArgCategory.Simple || !arg.valueExpression) {
+        if (!arg.valueExpression) {
+            return undefined;
+        }
+
+        if (arg.argCategory === ArgCategory.UnpackedDictionary) {
+            if (!addKnownEntries(evaluator.getTypeOfExpression(arg.valueExpression).type, sources)) {
+                return undefined;
+            }
+            continue;
+        }
+
+        if (arg.argCategory !== ArgCategory.Simple) {
             return undefined;
         }
 
         if (arg.name) {
-            valueExprs.set(arg.name.d.value, arg.valueExpression);
+            sources.set(arg.name.d.value, { expr: arg.valueExpression });
             continue;
         }
 
-        if (i !== 0 || arg.valueExpression.nodeType !== ParseNodeType.Dictionary) {
+        if (i !== 0) {
             return undefined;
         }
 
-        for (const entry of arg.valueExpression.d.items) {
-            if (entry.nodeType !== ParseNodeType.DictionaryKeyEntry) {
+        if (arg.valueExpression.nodeType === ParseNodeType.Dictionary) {
+            if (!addDictDisplayEntries(evaluator, arg.valueExpression, sources)) {
                 return undefined;
             }
-
-            const keyType = evaluator.getTypeOfExpression(entry.d.keyExpr).type;
-            if (
-                !isClassInstance(keyType) ||
-                !ClassType.isBuiltIn(keyType, 'str') ||
-                typeof keyType.priv.literalValue !== 'string'
-            ) {
-                return undefined;
-            }
-
-            valueExprs.set(keyType.priv.literalValue, entry.d.valueExpr);
+        } else if (!addKnownEntries(evaluator.getTypeOfExpression(arg.valueExpression).type, sources)) {
+            return undefined;
         }
     }
 
-    if (valueExprs.size === 0) {
-        return undefined;
+    return sources.size > 0 ? resolveEntries(evaluator, sources, valueType) : undefined;
+}
+
+// Called with the result of left | right (or left |= right). When the result is a
+// frozendict and both sides have known keys, the result has the entries of the
+// left side updated with those of the right side, as at runtime.
+export function applyFrozenDictMerge(
+    evaluator: TypeEvaluator,
+    leftType: Type,
+    rightExpr: ExpressionNode,
+    rightType: Type,
+    resultType: Type
+): Type {
+    if (!isClassInstance(resultType) || !isFrozenDictClass(resultType)) {
+        return resultType;
     }
 
+    const valueType = resultType.priv.typeArgs?.[1];
+    const sources = new Map<string, EntrySource>();
+    if (!valueType || !addKnownEntries(leftType, sources)) {
+        return resultType;
+    }
+
+    const hasRightEntries =
+        rightExpr.nodeType === ParseNodeType.Dictionary
+            ? addDictDisplayEntries(evaluator, rightExpr, sources)
+            : addKnownEntries(rightType, sources);
+    if (!hasRightEntries) {
+        return resultType;
+    }
+
+    const entries = resolveEntries(evaluator, sources, valueType);
+    return entries ? ClassType.cloneForFrozenDictEntries(resultType, entries) : resultType;
+}
+
+// Adds the entries of a frozendict with known entries. Returns false for any other type.
+function addKnownEntries(type: Type, sources: Map<string, EntrySource>): boolean {
+    if (!isClassInstance(type) || !type.priv.frozenDictEntries) {
+        return false;
+    }
+
+    type.priv.frozenDictEntries.forEach((entryType, key) => sources.set(key, { type: entryType }));
+    return true;
+}
+
+// Adds the entries of a dict display such as {'a': 1, **other}. Returns false if
+// a key isn't a string literal or an unpacked mapping has no known entries.
+function addDictDisplayEntries(
+    evaluator: TypeEvaluator,
+    node: DictionaryNode,
+    sources: Map<string, EntrySource>
+): boolean {
+    for (const entry of node.d.items) {
+        if (entry.nodeType === ParseNodeType.DictionaryExpandEntry) {
+            if (!addKnownEntries(evaluator.getTypeOfExpression(entry.d.expr).type, sources)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (entry.nodeType !== ParseNodeType.DictionaryKeyEntry) {
+            return false;
+        }
+
+        const keyType = evaluator.getTypeOfExpression(entry.d.keyExpr).type;
+        if (
+            !isClassInstance(keyType) ||
+            !ClassType.isBuiltIn(keyType, 'str') ||
+            typeof keyType.priv.literalValue !== 'string'
+        ) {
+            return false;
+        }
+
+        sources.set(keyType.priv.literalValue, { expr: entry.d.valueExpr });
+    }
+
+    return true;
+}
+
+// Evaluates the entries' value types. Returns undefined if one isn't known yet
+// or doesn't fit the frozendict's value type.
+function resolveEntries(
+    evaluator: TypeEvaluator,
+    sources: Map<string, EntrySource>,
+    valueType: Type
+): Map<string, Type> | undefined {
     const entries = new Map<string, Type>();
-    for (const [key, valueExpr] of valueExprs) {
-        const typeResult = evaluator.getTypeOfExpression(valueExpr);
+    for (const [key, source] of sources) {
+        if ('type' in source) {
+            if (!evaluator.assignType(valueType, source.type)) {
+                return undefined;
+            }
+            entries.set(key, source.type);
+            continue;
+        }
+
+        const typeResult = evaluator.getTypeOfExpression(source.expr);
         if (typeResult.isIncomplete || !evaluator.assignType(valueType, typeResult.type)) {
             return undefined;
         }
