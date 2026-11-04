@@ -162,7 +162,6 @@ import {
     applyDictDisplayEntries,
     applyFrozenDictMethodCall,
     removeDictKnownEntries,
-    getFrozenDictEntriesFromTypeArg,
     getTypeOfIndexedFrozenDict,
     isFrozenDictClass,
 } from './frozenDicts';
@@ -416,7 +415,6 @@ interface GetTypeArgsOptions {
     isFinalAnnotation?: boolean;
     isClassVarAnnotation?: boolean;
     supportsTypedDictTypeArg?: boolean;
-    supportsFrozenDictShapeArg?: boolean;
 }
 
 export interface MemberAccessTypeResult {
@@ -8430,17 +8428,12 @@ export function createTypeEvaluator(
                         nodeInfo.getFileInfo(node).diagnosticRuleSet.enableExperimentalFeatures &&
                         ClassType.isBuiltIn(concreteSubtype, 'TypedDict');
 
-                    // frozendict[{'key': T, ...}] spells the known entries of a frozendict.
-                    const supportsFrozenDictShapeArg =
-                        isInstantiableClass(concreteSubtype) && isFrozenDictClass(concreteSubtype);
-
                     let typeArgs = getTypeArgs(node, flags, {
                         isAnnotatedClass,
                         hasCustomClassGetItem: hasCustomClassGetItem || !isGenericClass,
                         isFinalAnnotation,
                         isClassVarAnnotation,
                         supportsTypedDictTypeArg,
-                        supportsFrozenDictShapeArg,
                     });
 
                     if (!isAnnotatedClass) {
@@ -9006,12 +8999,7 @@ export function createTypeEvaluator(
                     node: expr,
                 };
             } else {
-                typeResult = getTypeArg(
-                    expr,
-                    adjFlags,
-                    !!options?.supportsTypedDictTypeArg && argIndex === 0,
-                    !!options?.supportsFrozenDictShapeArg && argIndex === 0
-                );
+                typeResult = getTypeArg(expr, adjFlags, !!options?.supportsTypedDictTypeArg && argIndex === 0);
             }
 
             return typeResult;
@@ -9117,12 +9105,7 @@ export function createTypeEvaluator(
         return undefined;
     }
 
-    function getTypeArg(
-        node: ExpressionNode,
-        flags: EvalFlags,
-        supportsDictExpression: boolean,
-        supportsFrozenDictShape = false
-    ): TypeResultWithNode {
+    function getTypeArg(node: ExpressionNode, flags: EvalFlags, supportsDictExpression: boolean): TypeResultWithNode {
         let typeResult: TypeResultWithNode;
 
         let adjustedFlags =
@@ -9144,12 +9127,6 @@ export function createTypeEvaluator(
 
             // Set the node's type so it isn't reevaluated later.
             setTypeResultForNode(node, { type: UnknownType.create() });
-        } else if (node.nodeType === ParseNodeType.Dictionary && supportsFrozenDictShape) {
-            typeResult = {
-                type: UnknownType.create(),
-                knownEntries: getFrozenDictEntriesFromTypeArg(evaluatorInterface, node),
-                node,
-            };
         } else if (node.nodeType === ParseNodeType.Dictionary && supportsDictExpression) {
             const inlinedTypeDict =
                 prefetched?.typedDictClass && isInstantiableClass(prefetched.typedDictClass)
@@ -23189,33 +23166,6 @@ export function createTypeEvaluator(
 
             if (firstDefaultParamIndex >= 0) {
                 minTypeArgCount = firstDefaultParamIndex;
-            }
-
-            // frozendict[{'key': T, ...}]: a frozendict[str, <the value types>] with those entries.
-            const knownEntries = typeArgs.length > 0 ? typeArgs[0].knownEntries : undefined;
-            if (knownEntries) {
-                if (typeArgs.length > 1) {
-                    addDiagnostic(
-                        DiagnosticRule.reportInvalidTypeArguments,
-                        LocMessage.typeArgsTooMany().format({
-                            name: classType.priv.aliasName || classType.shared.name,
-                            expected: 1,
-                            received: typeArgCount,
-                        }),
-                        typeArgs[1].node
-                    );
-                }
-
-                const keyType =
-                    prefetched?.strClass && isInstantiableClass(prefetched.strClass)
-                        ? ClassType.cloneAsInstance(prefetched.strClass)
-                        : UnknownType.create();
-                const specializedClass = ClassType.specialize(
-                    classType,
-                    [keyType, combineTypes([...knownEntries.values()])],
-                    /* isTypeArgExplicit */ true
-                );
-                return { type: ClassType.cloneForKnownEntries(specializedClass, knownEntries) };
             }
 
             // Classes that accept inlined type dict type args allow only one.

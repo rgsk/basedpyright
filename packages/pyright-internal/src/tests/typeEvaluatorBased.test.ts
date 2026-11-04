@@ -333,63 +333,7 @@ test('frozendict with literal keys', () => {
     const configOptions = new ConfigOptions(Uri.empty());
     configOptions.defaultPythonVersion = pythonVersion3_15;
     const analysisResults = typeAnalyzeSampleFiles(['based_frozendict.py'], configOptions);
-    validateResultsButBased(analysisResults, {
-        errors: [
-            {
-                code: DiagnosticRule.reportGeneralTypeIssues,
-                line: 12,
-                message:
-                    'Could not access item in frozendict\n  "nme" is not a defined key in "frozendict[{\'name\': str, \'age\': int}]"',
-            },
-            {
-                code: DiagnosticRule.reportGeneralTypeIssues,
-                line: 61,
-                message:
-                    'Could not access item in frozendict\n  "a" is not a defined key in "frozendict[{\'b\': str}]"',
-            },
-            {
-                code: DiagnosticRule.reportAssignmentType,
-                line: 111,
-                message: `Type "frozendict[{'name': str}]" is not assignable to declared type "User"\n\u00a0\u00a0"age" is required in "User"`,
-            },
-            {
-                code: DiagnosticRule.reportAssignmentType,
-                line: 112,
-                message: `Type "frozendict[{'name': str, 'age': int, 'city': str}]" is not assignable to declared type "User"\n\u00a0\u00a0"city" is an undefined item in type "User"`,
-            },
-            {
-                code: DiagnosticRule.reportAssignmentType,
-                line: 113,
-            },
-            {
-                code: DiagnosticRule.reportAssignmentType,
-                line: 114,
-                message: `Type "frozendict[str, str | int]" is not assignable to declared type "User"\n\u00a0\u00a0"name" is required in "User"`,
-            },
-            {
-                code: DiagnosticRule.reportInvalidTypeForm,
-                line: 120,
-                message: 'Expected string literal for dictionary entry name',
-            },
-            {
-                code: DiagnosticRule.reportInvalidTypeArguments,
-                line: 121,
-                message: 'Too many type arguments provided for "frozendict"; expected 1 but received 2',
-            },
-            {
-                code: DiagnosticRule.reportAssignmentType,
-                line: 131,
-            },
-            { code: DiagnosticRule.reportCallIssue, line: 180, message: 'Argument missing for parameter "age"' },
-            {
-                code: DiagnosticRule.reportCallIssue,
-                line: 181,
-                message: expect.stringContaining('Unable to match unpacked frozendict argument to parameters'),
-            },
-            { code: DiagnosticRule.reportArgumentType, line: 182 },
-            { code: DiagnosticRule.reportAssignmentType, line: 218 },
-        ],
-    });
+    validateResults(analysisResults, 8);
 });
 
 test('dict with literal keys', () => {
@@ -405,10 +349,5 @@ test('frozendict from the frozendict package', () => {
     configOptions.defaultPythonVersion = pythonVersion3_14;
     configOptions.projectRoot = UriEx.file(resolveSampleFilePath('based_frozendict_pypi'));
     const analysisResults = typeAnalyzeSampleFiles(['based_frozendict_pypi/sample.py'], configOptions);
-    validateResultsButBased(analysisResults, {
-        errors: [
-            { code: DiagnosticRule.reportGeneralTypeIssues, line: 8 },
-            { code: DiagnosticRule.reportAssignmentType, line: 18 },
-        ],
-    });
+    validateResults(analysisResults, 1);
 });

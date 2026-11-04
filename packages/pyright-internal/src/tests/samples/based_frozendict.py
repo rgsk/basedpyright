@@ -7,10 +7,11 @@ from typing import Literal, Never, assert_type
 
 def keyword_arguments() -> None:
     user = frozendict(name="rahul", age=27)
-    assert_type(user, frozendict[{"name": str, "age": int}])
+    reveal_type(user, expected_text="frozendict[{'name': str, 'age': int}]")
     assert_type(user["name"], str)
     assert_type(user["age"], int)
-    user["nme"]  # error
+    # This should generate an error.
+    user["nme"]
 
 
 def dict_display() -> None:
@@ -59,7 +60,8 @@ def without_known_entries(key: str, data: dict[str, int]) -> None:
 
 def branches(flag: bool) -> None:
     either = frozendict(a=1) if flag else frozendict(b="x")
-    either["a"]  # error
+    # This should generate an error.
+    either["a"]
 
 
 def takes_frozendict(value: frozendict[str, int]) -> None: ...
@@ -82,68 +84,37 @@ def generic() -> None:
 def tuple_values() -> None:
     # literals inside a tuple are widened like the value type itself
     cfg = frozendict({"lr": 1e-3, "layers": (64, 64)})
-    assert_type(cfg, frozendict[{"lr": float, "layers": tuple[int, int]}])
+    reveal_type(cfg, expected_text="frozendict[{'lr': float, 'layers': tuple[int, int]}]")
     assert_type(cfg["layers"], tuple[int, int])
     nested = frozendict({"shape": ((1, 2), "x")})
     assert_type(nested["shape"], tuple[tuple[int, int], str])
     # as far as the value type allows: for keyword arguments it keeps them
     by_kwarg = frozendict(size=(1, 2))
-    assert_type(by_kwarg, frozendict[{"size": tuple[Literal[1], Literal[2]]}])
+    reveal_type(by_kwarg, expected_text="frozendict[{'size': tuple[Literal[1], Literal[2]]}]")
     assert_type(by_kwarg["size"], tuple[Literal[1], Literal[2]])
     # unless the declared value type needs the literals
     pinned: frozendict[str, tuple[Literal[1], int]] = frozendict({"p": (1, 2)})
     assert_type(pinned["p"], tuple[Literal[1], Literal[2]])
 
 
-# The known entries can be spelled in a type expression.
-type User = frozendict[{"name": str, "age": int}]
-
-
-def load() -> User:
-    return frozendict(name="rahul", age=27)
-
-
-def annotations(plain: frozendict[str, str | int]) -> None:
-    user = load()
-    assert_type(user["age"], int)
-    assert_type(user, frozendict[{"name": str, "age": int}])
-    inline: frozendict[{"a-b": int, "pair": tuple[int, int]}] = frozendict({"a-b": 1, "pair": (1, 2)})
-    assert_type(inline["pair"], tuple[int, int])
-    missing: User = frozendict(name="rahul")
-    extra: User = frozendict(name="rahul", age=27, city="delhi")
-    wrong_type: User = frozendict(name="rahul", age="27")
-    unknown_keys: User = plain
-    widened: frozendict[str, str | int] = user
-    print(missing, extra, wrong_type, unknown_keys, widened)
-
-
-def invalid_annotations(
-    non_literal_key: frozendict[{1: int}],
-    too_many: frozendict[{"a": int}, int],
+# The known entries aren't a type expression: other checkers wouldn't accept one.
+def annotation(
+    # This should generate errors (3), as in other checkers.
+    user: frozendict[{"name": str}],
 ) -> None: ...
-
-
-def widened_entries() -> None:
-    # each entry is checked on its own, as a frozendict can't change
-    user = frozendict(name="rahul", age=27)
-    optional_age: frozendict[{"name": str, "age": int | None}] = user
-    built: frozendict[{"name": str, "age": int | None}] = frozendict(name="rahul", age=27)
-    users = [user]
-    still_invariant: list[frozendict[{"name": str, "age": int | None}]] = users
-    print(optional_age, built, still_invariant)
 
 
 # Merging keeps the known entries when both sides have them; the right side wins.
 def merging(plain: frozendict[str, int]) -> None:
     defaults = frozendict(lr=1e-3, epochs=10)
-    assert_type(defaults | frozendict(epochs="all"), frozendict[{"lr": float, "epochs": str}])
-    assert_type(defaults | {"batch": 32}, frozendict[{"lr": float, "epochs": int, "batch": int}])
-    assert_type(frozendict(defaults, epochs=20), frozendict[{"lr": float, "epochs": int}])
-    assert_type(frozendict({**defaults, "epochs": 20}), frozendict[{"lr": float, "epochs": int}])
-    assert_type(frozendict(**defaults, batch=32), frozendict[{"lr": float, "epochs": int, "batch": int}])
+    reveal_type(defaults | frozendict(epochs="all"), expected_text="frozendict[{'lr': float, 'epochs': str}]")
+    reveal_type(defaults | {"batch": 32}, expected_text="frozendict[{'lr': float, 'epochs': int, 'batch': int}]")
+    reveal_type(frozendict(defaults, epochs=20), expected_text="frozendict[{'lr': float, 'epochs': int}]")
+    reveal_type(frozendict({**defaults, "epochs": 20}), expected_text="frozendict[{'lr': float, 'epochs': int}]")
+    reveal_type(frozendict(**defaults, batch=32), expected_text="frozendict[{'lr': float, 'epochs': int, 'batch': int}]")
     updated = defaults
     updated |= {"epochs": 20}
-    assert_type(updated, frozendict[{"lr": float, "epochs": int}])
+    reveal_type(updated, expected_text="frozendict[{'lr': float, 'epochs': int}]")
     # without known entries on one side, there are none in the result
     assert_type(defaults | plain, frozendict[str, float | int])
     assert_type(frozendict(plain, extra=1), frozendict[str, int])
@@ -161,7 +132,7 @@ def get_and_copy(key: Literal["name", "age"], any_key: str, flag: bool) -> None:
     assert_type(user.get("nme", "x"), str)
     assert_type(user.get(key), str | int)
     assert_type(user.get(any_key), str | int | None)
-    assert_type(user.copy(), frozendict[{"name": str, "age": int}])
+    reveal_type(user.copy(), expected_text="frozendict[{'name': str, 'age': int}]")
     either = frozendict(a=1) if flag else frozendict(b="x")
     assert_type(either.get("a"), int | None)
 
@@ -178,9 +149,12 @@ def unpacking() -> None:
     greet(**user)
     greet(**frozendict(name="rahul"), age=27)
     greet_rest(**frozendict(name="rahul", age=27, height=180))
-    greet(**frozendict(name="rahul"))  # error: "age" is missing
-    greet(**frozendict(name="rahul", age=27, city="delhi"))  # error: no parameter "city"
-    greet(**frozendict(name="rahul", age="27"))  # error: "age" is a str
+    # This should generate an error: "age" is missing.
+    greet(**frozendict(name="rahul"))
+    # This should generate an error: there's no parameter "city".
+    greet(**frozendict(name="rahul", age=27, city="delhi"))
+    # This should generate an error: "age" is a str.
+    greet(**frozendict(name="rahul", age="27"))
 
 
 # The value of a mapping pattern has the key's type.
@@ -193,41 +167,23 @@ def patterns() -> None:
             assert_type(age, int)
 
 
-# Unions of frozendicts with known entries narrow like unions of TypedDicts.
-type Circle = frozendict[{"kind": Literal["circle"], "radius": float}]
-type Square = frozendict[{"kind": Literal["square"], "side": float}]
-
-
-def tagged(shape: Circle | Square) -> None:
-    if shape["kind"] == "circle":
-        assert_type(shape["radius"], float)
-    else:
-        assert_type(shape["side"], float)
+# Unions of frozendicts with known entries narrow by key, as their keys are exact.
+def tagged(flag: bool) -> None:
+    shape = frozendict(kind="circle", radius=1.0) if flag else frozendict(kind="square", side=2.0)
     if "radius" in shape:
         assert_type(shape["radius"], float)
     else:
         assert_type(shape["side"], float)
 
 
-# A literal value is kept where the expected type needs it.
-def building() -> None:
-    tagged(frozendict(kind="circle", radius=1.0))
-    circle: Circle = frozendict({"kind": "circle", "radius": 1.0})
-    tagged(circle)
-    untagged = frozendict(kind="circle")
-    assert_type(untagged, frozendict[{"kind": str}])
-    wrong: Circle = frozendict(kind="square", radius=1.0)  # error
-    print(wrong)
-
-
 # fromkeys with literal keys has known entries too.
 def from_keys(keys: list[str]) -> None:
-    assert_type(frozendict.fromkeys(["lr", "momentum"], 0.0), frozendict[{"lr": float, "momentum": float}])
-    assert_type(frozendict.fromkeys(("lr",)), frozendict[{"lr": None}])
+    reveal_type(frozendict.fromkeys(["lr", "momentum"], 0.0), expected_text="frozendict[{'lr': float, 'momentum': float}]")
+    reveal_type(frozendict.fromkeys(("lr",)), expected_text="frozendict[{'lr': None}]")
     assert_type(frozendict.fromkeys(keys, 1), frozendict[str, int])
     # several keys sharing a default, merged into a known shape
     user = frozendict(name="rahul", age=27)
-    assert_type(
+    reveal_type(
         frozendict(**user, **frozendict.fromkeys(["lr", "momentum"], 0.0)),
-        frozendict[{"name": str, "age": int, "lr": float, "momentum": float}],
+        expected_text="frozendict[{'name': str, 'age': int, 'lr': float, 'momentum': float}]",
     )

@@ -3758,23 +3758,6 @@ export class CompletionProvider {
             stringNode ? new Set([stringNode.parent?.id]) : undefined
         );
 
-        // frozendict({...}) where the frozendict's expected type has known entries:
-        // offer their keys.
-        if (
-            dictionaryNode.parent?.nodeType === ParseNodeType.Argument &&
-            !dictionaryNode.parent.d.name &&
-            dictionaryNode.parent.parent?.nodeType === ParseNodeType.Call &&
-            dictionaryNode.parent.parent.d.args[0] === dictionaryNode.parent
-        ) {
-            const expectedFrozenDictType = this._getExpectedFrozenDictType(dictionaryNode.parent.parent);
-            if (
-                expectedFrozenDictType &&
-                this._tryAddTypedDictKeys(expectedFrozenDictType, keys, priorWord, priorText, postText, completionMap)
-            ) {
-                return true;
-            }
-        }
-
         const expectedTypeResult = this.evaluator.getExpectedType(dictionaryNode);
         if (!expectedTypeResult) {
             return false;
@@ -3787,28 +3770,6 @@ export class CompletionProvider {
         }
 
         return this._tryAddTypedDictKeys(expectedTypeResult.type, keys, priorWord, priorText, postText, completionMap);
-    }
-
-    // For a call of frozendict (or the frozendict package's class), the type it's
-    // expected to produce, when that has frozendicts with known entries.
-    private _getExpectedFrozenDictType(callNode: CallNode): Type | undefined {
-        const calleeType = this.evaluator.getType(callNode.d.leftExpr);
-        if (!calleeType || !isInstantiableClass(calleeType) || !isFrozenDictClass(calleeType)) {
-            return undefined;
-        }
-
-        const expectedTypeResult = this.evaluator.getExpectedType(callNode);
-        if (!expectedTypeResult) {
-            return undefined;
-        }
-
-        let hasEntries = false;
-        doForEachSubtype(expectedTypeResult.type, (subtype) => {
-            if (isClassInstance(subtype) && subtype.priv.knownEntries) {
-                hasEntries = true;
-            }
-        });
-        return hasEntries ? expectedTypeResult.type : undefined;
     }
 
     private _tryNarrowTypedDicts(types: ClassType[], keys: string[]): ClassType[] {
@@ -4075,21 +4036,6 @@ export class CompletionProvider {
                 keys.forEach((key: string) => argNameSet.add(key));
             }
         });
-
-        // frozendict(...) where the frozendict's expected type has known entries:
-        // offer their keys as keyword arguments.
-        const expectedFrozenDictType = this._getExpectedFrozenDictType(signatureInfo.callNode);
-        if (expectedFrozenDictType) {
-            doForEachSubtype(expectedFrozenDictType, (subtype) => {
-                if (isClassInstance(subtype)) {
-                    subtype.priv.knownEntries?.forEach((_, key) => {
-                        if (Tokenizer.isPythonIdentifier(key) && !Tokenizer.isPythonKeyword(key)) {
-                            argNameSet.add(key);
-                        }
-                    });
-                }
-            });
-        }
 
         // Remove any named parameters that are already provided.
         signatureInfo.callNode.d.args!.forEach((arg) => {

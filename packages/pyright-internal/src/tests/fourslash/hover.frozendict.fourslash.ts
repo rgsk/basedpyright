@@ -21,13 +21,6 @@
 //// def [|/*marker7*/make_declared|]() -> frozendict[str, str | int]:
 ////     return frozendict(name="a", age=1)
 ////
-//// type User = frozendict[{"name": str, "age": int}]
-////
-//// def [|/*marker8*/load|]() -> User:
-////     return frozendict(name="a", age=1)
-////
-//// [|/*marker9*/loaded|] = load()
-////
 //// user[[|/*marker10*/"name"|]]
 //// headers[[|/*marker11*/"content-type"|]]
 //// user[[|/*marker12*/"nme"|]]
@@ -42,8 +35,6 @@ helper.verifyHover('markdown', {
     marker5: '```python\n(variable) plain: frozendict[str, int]\n```',
     marker6: "```python\n(function) def make() -> tuple[frozendict[{'name': str, 'age': int}], Literal[1]]\n```",
     marker7: '```python\n(function) def make_declared() -> frozendict[str, str | int]\n```',
-    marker8: '```python\n(function) def load() -> User\n```',
-    marker9: '```python\n(variable) loaded: User\n```',
     marker10: '```python\n(key) name: str\n```',
     marker11: '```python\n(key) content-type: str\n```',
     marker12: null,

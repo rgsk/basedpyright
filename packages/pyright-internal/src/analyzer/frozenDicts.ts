@@ -257,9 +257,9 @@ function addDictDisplayEntries(
 }
 
 // Evaluates the entries' value types. Returns undefined if one isn't known yet
-// or doesn't fit the frozendict's value type. A literal is widened unless the
-// expected type (frozendicts with known entries) needs it for that key, as in
-// shape: Circle | Square = frozendict(kind='circle', ...). For a dict (allowInexact)
+// or doesn't fit the frozendict's value type. A literal is widened where its widened
+// type still fits the value type, as frozendict(age=27) is frozendict[str, int]. For
+// a dict (allowInexact)
 // without an expected type, it's widened even where its value type kept the literal,
 // as dict(size=(1, 2)) does: its entries only describe reads. With an expected type
 // (d: dict[str, Literal[3]] = {...}), the value type is what was asked for.
@@ -292,8 +292,7 @@ function resolveEntries(
         const strippedType = stripLiteralsInTuples(evaluator, entryType);
         if (
             strippedType !== entryType &&
-            ((allowInexact && !expectedType) || evaluator.assignType(valueType, strippedType)) &&
-            !isLiteralNeeded(evaluator, expectedType, key, entryType, strippedType)
+            ((allowInexact && !expectedType) || evaluator.assignType(valueType, strippedType))
         ) {
             entryType = strippedType;
         }
@@ -396,56 +395,6 @@ export function getTypeOfIndexedFrozenDict(
     }
 
     return { type, isIncomplete: !!indexTypeResult.isIncomplete };
-}
-
-// Reads the known entries spelled as the type argument of frozendict[{'key': T, ...}].
-// Each key must be a string literal; each value is a type expression.
-export function getFrozenDictEntriesFromTypeArg(evaluator: TypeEvaluator, node: DictionaryNode): Map<string, Type> {
-    const entries = new Map<string, Type>();
-
-    node.d.items.forEach((entry) => {
-        if (entry.nodeType !== ParseNodeType.DictionaryKeyEntry) {
-            evaluator.addDiagnostic(
-                DiagnosticRule.reportInvalidTypeForm,
-                LocMessage.typedDictSecondArgDictEntry(),
-                entry
-            );
-            return;
-        }
-
-        const valueType = convertToInstance(evaluator.getTypeOfExpressionExpectingType(entry.d.valueExpr).type);
-
-        if (entry.d.keyExpr.nodeType !== ParseNodeType.StringList) {
-            evaluator.addDiagnostic(
-                DiagnosticRule.reportInvalidTypeForm,
-                LocMessage.typedDictEntryName(),
-                entry.d.keyExpr
-            );
-            return;
-        }
-
-        const key = entry.d.keyExpr.d.strings.map((s) => s.d.value).join('');
-        if (entries.has(key)) {
-            evaluator.addDiagnostic(
-                DiagnosticRule.reportInvalidTypeForm,
-                LocMessage.typedDictEntryUnique(),
-                entry.d.keyExpr
-            );
-            return;
-        }
-
-        entries.set(key, valueType);
-    });
-
-    // The dict and its keys aren't type expressions: don't evaluate them as such later.
-    evaluator.setTypeResultForNode(node, { type: UnknownType.create() });
-    node.d.items.forEach((entry) => {
-        if (entry.nodeType === ParseNodeType.DictionaryKeyEntry) {
-            evaluator.setTypeResultForNode(entry.d.keyExpr, { type: UnknownType.create() });
-        }
-    });
-
-    return entries;
 }
 
 // Called with the result of x.get(...) or x.copy() when x is a frozendict or dict
@@ -575,33 +524,6 @@ export function getFrozenDictEntryTypeForKeys(type: Type, keyType: Type): Type |
     });
 
     return isLiteralKey ? combineTypes(entryTypes) : undefined;
-}
-
-// Whether the expected type has a frozendict with known entries whose entry for
-// the key accepts the literal type but not its widened type.
-function isLiteralNeeded(
-    evaluator: TypeEvaluator,
-    expectedType: Type | undefined,
-    key: string,
-    literalType: Type,
-    strippedType: Type
-): boolean {
-    if (!expectedType) {
-        return false;
-    }
-
-    let isNeeded = false;
-    doForEachSubtype(expectedType, (subtype) => {
-        const expectedEntryType = isClassInstance(subtype) ? subtype.priv.knownEntries?.get(key) : undefined;
-        if (
-            expectedEntryType &&
-            evaluator.assignType(expectedEntryType, literalType) &&
-            !evaluator.assignType(expectedEntryType, strippedType)
-        ) {
-            isNeeded = true;
-        }
-    });
-    return isNeeded;
 }
 
 // frozendict.fromkeys(['a', 'b'], value) (or dict.fromkeys): each key gets the value's type (None
