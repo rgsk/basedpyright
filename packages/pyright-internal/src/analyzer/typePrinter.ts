@@ -101,6 +101,9 @@ export const enum PrintTypeFlags {
 
     // Omit TypeVar scopes.
     OmitTypeVarScope = 1 << 13,
+
+    // Print the known entries of a frozendict or dict one per line, as in a hover.
+    MultilineKnownEntries = 1 << 14,
 }
 
 export type FunctionReturnTypeCallback = (type: FunctionType) => Type;
@@ -1167,6 +1170,14 @@ function printObjectTypeForClassInternal(
             );
             return `${printStringLiteralKey(key)}: ${entryTypeText}`;
         });
+
+        // One entry per line, indented, with a trailing comma, as a formatter lays out
+        // a dict display: dict[{\n    'name': str,\n}]. Nested shapes are indented too.
+        if ((printTypeFlags & PrintTypeFlags.MultilineKnownEntries) !== 0 && entryStrings.length > 0) {
+            const lines = entryStrings.map((entry) => `    ${entry.replace(/\n/g, '\n    ')},`);
+            return `${objName}[{\n${lines.join('\n')}\n}]`;
+        }
+
         return `${objName}[{${entryStrings.join(', ')}}]`;
     }
 

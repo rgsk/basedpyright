@@ -30908,6 +30908,9 @@ export function createTypeEvaluator(
         if (options?.disablePep604) {
             flags &= ~TypePrinter.PrintTypeFlags.PEP604;
         }
+        if (options?.multilineKnownEntries) {
+            flags |= TypePrinter.PrintTypeFlags.MultilineKnownEntries;
+        }
 
         return TypePrinter.printType(type, flags, getEffectiveReturnType, options?.importTracker);
     }

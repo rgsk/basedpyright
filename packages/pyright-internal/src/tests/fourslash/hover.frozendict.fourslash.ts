@@ -21,6 +21,8 @@
 //// def [|/*marker7*/make_declared|]() -> frozendict[str, str | int]:
 ////     return frozendict(name="a", age=1)
 ////
+//// [|/*marker15*/cfg|] = {"lr": 0.1, "model": {"kind": "last"}}
+////
 //// user[[|/*marker10*/"name"|]]
 //// headers[[|/*marker11*/"content-type"|]]
 //// user[[|/*marker12*/"nme"|]]
@@ -28,10 +30,10 @@
 //// plain[[|/*marker14*/"a"|]]
 
 helper.verifyHover('markdown', {
-    marker1: "```python\n(variable) user: frozendict[{'name': str, 'age': int}]\n```",
-    marker2: "```python\n(variable) headers: frozendict[{'content-type': str, 'class': int}]\n```",
-    marker3: "```python\n(variable) nested: frozendict[{'inner': frozendict[{'a': int}]}]\n```",
-    marker4: "```python\n(variable) either: frozendict[{'a': int}] | frozendict[{'b': str}]\n```",
+    marker1: "```python\n(variable) user: frozendict[{\n    'name': str,\n    'age': int,\n}]\n```",
+    marker2: "```python\n(variable) headers: frozendict[{\n    'content-type': str,\n    'class': int,\n}]\n```",
+    marker3: "```python\n(variable) nested: frozendict[{\n    'inner': frozendict[{\n        'a': int,\n    }],\n}]\n```",
+    marker4: "```python\n(variable) either: frozendict[{\n    'a': int,\n}] | frozendict[{\n    'b': str,\n}]\n```",
     marker5: '```python\n(variable) plain: frozendict[str, int]\n```',
     marker6: "```python\n(function) def make() -> tuple[frozendict[{'name': str, 'age': int}], Literal[1]]\n```",
     marker7: '```python\n(function) def make_declared() -> frozendict[str, str | int]\n```',
@@ -40,4 +42,5 @@ helper.verifyHover('markdown', {
     marker12: null,
     marker13: '```python\n(key) a: int\n```',
     marker14: null,
+    marker15: "```python\n(variable) cfg: dict[{\n    'lr': float,\n    'model': dict[{\n        'kind': str,\n    }],\n}]\n```",
 });

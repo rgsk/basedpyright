@@ -253,6 +253,7 @@ export function getVariableTypeText(
                 // Handle type aliases specially.
                 const typeText = evaluator.printType(convertToInstance(getTypeForToolTip(evaluator, typeNode)), {
                     expandTypeAlias: true,
+                    multilineKnownEntries: true,
                 });
 
                 return `(type) ${name} = ` + typeText;
@@ -277,7 +278,9 @@ export function getVariableTypeText(
         );
     }
 
-    const typeText = typeVarName ?? name + ': ' + evaluator.printType(getTypeForToolTip(evaluator, typeNode));
+    const typeText =
+        typeVarName ??
+        name + ': ' + evaluator.printType(getTypeForToolTip(evaluator, typeNode), { multilineKnownEntries: true });
 
     return `(${label}) ` + typeText;
 }
@@ -889,7 +892,7 @@ export class HoverProvider {
 
     private _getTypeText(node: ExpressionNode, options?: PrintTypeOptions): string {
         const type = this._getType(node);
-        return ': ' + this._evaluator.printType(type, options);
+        return ': ' + this._evaluator.printType(type, { multilineKnownEntries: true, ...options });
     }
 
     private _addDocumentationPart(
