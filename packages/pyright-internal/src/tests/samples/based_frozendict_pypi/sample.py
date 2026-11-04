@@ -10,6 +10,8 @@ assert_type(user["age"], int)
 user["nme"]
 
 reveal_type(user | {"age": "x"}, expected_text="frozendict[{'name': str, 'age': str}]")
+# A dict on the left makes a dict, printed as dict even though the stub says typing.Dict.
+reveal_type({"age": "x"} | user, expected_text="dict[{'age': int, 'name': str}]")
 assert_type(user.get("age"), int)
 assert_type(user.get("nme"), None)
 reveal_type(user.copy(), expected_text="frozendict[{'name': str, 'age': int}]")

@@ -1171,14 +1171,23 @@ function printObjectTypeForClassInternal(
             return `${printStringLiteralKey(key)}: ${entryTypeText}`;
         });
 
+        // The spelling uses the class's own name, not an alias such as typing.Dict
+        // (which the frozendict package's stub uses for the result of dict | frozendict).
+        const shapeName =
+            type.priv.aliasName && objName === type.priv.aliasName
+                ? (printTypeFlags & PrintTypeFlags.UseFullyQualifiedNames) !== 0
+                    ? type.shared.fullName
+                    : type.shared.name
+                : objName;
+
         // One entry per line, indented, with a trailing comma, as a formatter lays out
         // a dict display: dict[{\n    'name': str,\n}]. Nested shapes are indented too.
         if ((printTypeFlags & PrintTypeFlags.MultilineKnownEntries) !== 0 && entryStrings.length > 0) {
             const lines = entryStrings.map((entry) => `    ${entry.replace(/\n/g, '\n    ')},`);
-            return `${objName}[{\n${lines.join('\n')}\n}]`;
+            return `${shapeName}[{\n${lines.join('\n')}\n}]`;
         }
 
-        return `${objName}[{${entryStrings.join(', ')}}]`;
+        return `${shapeName}[{${entryStrings.join(', ')}}]`;
     }
 
     // If this is a pseudo-generic class, don't display the type arguments
