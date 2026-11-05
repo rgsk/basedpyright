@@ -195,20 +195,21 @@ function addKnownEntries(type: Type, sources: Map<string, EntrySource>, allowIne
 
 // Called with the type of a dict display. If every key is a string literal (or comes
 // from a ** unpacked dict or frozendict with known entries), returns the type with
-// its known entries attached. An empty display has none: {} is a plain dict.
+// its known entries attached. An empty display {} has known entries too, none yet,
+// so a dict that starts empty and is filled key by key (d = {}; d['a'] = 1) has a
+// shape like any other.
 export function applyDictDisplayEntries(
     evaluator: TypeEvaluator,
     node: DictionaryNode,
     type: Type,
     expectedType?: Type
 ): Type {
-    if (
-        node.d.items.length === 0 ||
-        !isClassInstance(type) ||
-        !ClassType.isBuiltIn(type, 'dict') ||
-        type.priv.knownEntries
-    ) {
+    if (!isClassInstance(type) || !ClassType.isBuiltIn(type, 'dict') || type.priv.knownEntries) {
         return type;
+    }
+
+    if (node.d.items.length === 0) {
+        return ClassType.cloneForKnownEntries(type, new Map());
     }
 
     const valueType = type.priv.typeArgs?.[1];

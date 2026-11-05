@@ -1151,12 +1151,15 @@ function printObjectTypeForClassInternal(
     // A frozendict or dict with known entries prints them as they are spelled in a
     // type expression: frozendict[{'name': str, 'age': int}]. That spelling implies
     // str keys, so a dict with another key type (d: dict[object, int] = {'a': 1})
-    // prints its type arguments instead.
+    // prints its type arguments instead. A dict that started as {} has an unknown key
+    // type: it prints its entries once it has some (d = {}; d['a'] = 1 is
+    // dict[{'a': int}]), and dict[Unknown, Unknown] until then.
     const keyTypeArg = type.priv.typeArgs?.[0];
     if (
         type.priv.knownEntries &&
         (ClassType.hasExactKnownEntries(type) ||
-            (keyTypeArg && isClassInstance(keyTypeArg) && ClassType.isBuiltIn(keyTypeArg, 'str')))
+            (keyTypeArg && isClassInstance(keyTypeArg) && ClassType.isBuiltIn(keyTypeArg, 'str')) ||
+            (keyTypeArg && isUnknown(keyTypeArg) && type.priv.knownEntries.size > 0))
     ) {
         const entryStrings = [...type.priv.knownEntries].map(([key, entryType]) => {
             const entryTypeText = printTypeInternal(

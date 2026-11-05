@@ -31,6 +31,27 @@ def not_literal_keys(key: str) -> None:
     reveal_type({1: "a"}, expected_text="dict[int, str]")
 
 
+def starts_empty(a: bool) -> None:
+    prb = {}
+    reveal_type(prb, expected_text="dict[Unknown, Unknown]")
+    prb["env"] = 22
+    prb["env"] += 1
+    prb["name"] = "probe"
+    reveal_type(prb, expected_text="dict[{'env': int, 'name': str}]")
+    assert_type(prb["env"], int)
+
+    # A declared type is kept, as for a non-empty dict (see expected_types).
+    declared: dict[str, int] = {}
+    reveal_type(declared, expected_text="dict[str, int]")
+
+    # Empty in one branch, filled in the other: the empty one is dropped, as for
+    # any empty container.
+    branches = {}
+    if a:
+        branches = {"a": 2}
+    reveal_type(branches, expected_text="dict[{'a': int}]")
+
+
 def unknown_key() -> None:
     user = {"name": "rahul", "age": 27}
     # No error: code the checker can't follow may have added the key.
