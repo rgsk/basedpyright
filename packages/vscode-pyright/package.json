@@ -1934,6 +1934,18 @@
                     "description": "Path to folder with a list of Virtual Environments.",
                     "scope": "resource"
                 },
+                "basedpyright.fork.enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Run the local basedpyright fork (`#basedpyright.fork.serverPath#`) in every project instead of the stock server. Takes precedence over `#basedpyright.importStrategy#`. Changing it asks to reload the window.",
+                    "scope": "window"
+                },
+                "basedpyright.fork.serverPath": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "The fork's language server module, e.g. `~/Documents/codes/projects/basedpyright-frozendict/packages/pyright/langserver.index.js`. Used when `#basedpyright.fork.enabled#` is on.",
+                    "scope": "window"
+                },
                 "basedpyright.importStrategy": {
                     "type": "string",
                     "default": "fromEnvironment",

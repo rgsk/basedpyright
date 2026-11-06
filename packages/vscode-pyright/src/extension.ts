@@ -170,7 +170,38 @@ export async function activate(context: ExtensionContext) {
     cancellationStrategy = new FileBasedCancellationStrategy();
     let serverOptions: ServerOptions | undefined = undefined;
     const bundlePath = context.asAbsolutePath(path.join('dist', 'server.js'));
-    if (workspace.getConfiguration('basedpyright').get('importStrategy') === 'fromEnvironment') {
+
+    // fork switch: basedpyright.fork.enabled runs the server at basedpyright.fork.serverPath (a local
+    // build of the fork) in every project, ahead of importStrategy. Toggling it reloads the window.
+    context.subscriptions.push(
+        workspace.onDidChangeConfiguration(async (e) => {
+            if (e.affectsConfiguration('basedpyright.fork')) {
+                const reload = 'Reload Window';
+                if ((await window.showInformationMessage('basedpyright: fork setting changed.', reload)) === reload) {
+                    await commands.executeCommand('workbench.action.reloadWindow');
+                }
+            }
+        })
+    );
+    const forkConfig = workspace.getConfiguration('basedpyright.fork');
+    if (forkConfig.get<boolean>('enabled')) {
+        const forkServerPath = (forkConfig.get<string>('serverPath') ?? '').replace(/^~(?=$|\/)/, os.homedir());
+        if (forkServerPath && existsSync(forkServerPath)) {
+            console.log('using basedpyright fork server:', forkServerPath);
+            const forkRun = {
+                module: forkServerPath,
+                transport: TransportKind.ipc,
+                args: cancellationStrategy.getCommandLineArguments(),
+                options: { execArgv: [`--max-old-space-size=${defaultHeapSize}`] },
+            };
+            serverOptions = { run: forkRun, debug: forkRun };
+        } else {
+            void window.showWarningMessage(
+                `basedpyright.fork.enabled is on but basedpyright.fork.serverPath (${forkServerPath || 'empty'}) doesn't exist: using the stock server.`
+            );
+        }
+    }
+    if (!serverOptions && workspace.getConfiguration('basedpyright').get('importStrategy') === 'fromEnvironment') {
         const isWindows = os.platform() === 'win32';
         const executableName = `basedpyright-langserver${isWindows ? '.exe' : ''}`;
 
