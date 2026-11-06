@@ -55,6 +55,7 @@ import {
     InitializeResult,
     LSPObject,
     Location,
+    LocationLink,
     MarkupKind,
     PrepareRenameParams,
     PublishDiagnosticsParams,
@@ -167,7 +168,8 @@ import { RenameUsageFinder } from './analyzer/renameUsageFinder';
 import { AutoImporter, buildModuleSymbolsMap } from './languageService/autoImporter';
 import { zip } from 'lodash';
 import { assert } from './common/debug';
-import { convertOffsetToPosition, convertPositionToOffset } from './common/positionUtils';
+import { ProgramView } from './common/extensibility';
+import { convertOffsetsToRange, convertOffsetToPosition, convertPositionToOffset } from './common/positionUtils';
 import { findNodeByOffset } from './analyzer/parseTreeUtils';
 import { ParseNodeType } from './parser/parseNodes';
 import { StringTokenFlags } from './parser/tokenizerTypes';
@@ -231,6 +233,7 @@ export abstract class LanguageServerBase implements LanguageServerInterface, Dis
         hasHierarchicalDocumentSymbolCapability: false,
         hasWindowProgressCapability: false,
         hasGoToDeclarationCapability: false,
+        hasDefinitionLinkCapability: false,
         hasDocumentChangeCapability: false,
         hasDocumentAnnotationCapability: false,
         hasCompletionCommitCharCapability: false,
@@ -707,6 +710,7 @@ export abstract class LanguageServerBase implements LanguageServerInterface, Dis
         this.client.supportsTaskItemDiagnosticTag = this.client.hasVisualStudioExtensionsCapability;
         this.client.hasWindowProgressCapability = !!capabilities.window?.workDoneProgress;
         this.client.hasGoToDeclarationCapability = !!capabilities.textDocument?.declaration;
+        this.client.hasDefinitionLinkCapability = !!capabilities.textDocument?.definition?.linkSupport;
         const completionResolveProperties =
             capabilities.textDocument?.completion?.completionItem?.resolveSupport?.properties ?? [];
         this.client.completionItemResolveSupportsAdditionalTextEdits =
@@ -899,9 +903,50 @@ export abstract class LanguageServerBase implements LanguageServerInterface, Dis
         if (!locations) {
             return undefined;
         }
-        return locations
-            .filter((loc) => this.canNavigateToFile(loc.uri, workspace.service.fs))
-            .map((loc) => Location.create(this.convertUriToLspUriString(workspace.service.fs, loc.uri), loc.range));
+        const navigable = locations.filter((loc) => this.canNavigateToFile(loc.uri, workspace.service.fs));
+
+        // A string (such as the key in user['the big key name']) is underlined whole
+        // on ctrl+hover, rather than only the word under the mouse.
+        const originRange = this.client.hasDefinitionLinkCapability
+            ? workspace.service.run((program) => this._getStringRangeAt(program, uri, params.position), token)
+            : undefined;
+        if (originRange) {
+            return navigable.map((loc) =>
+                LocationLink.create(
+                    this.convertUriToLspUriString(workspace.service.fs, loc.uri),
+                    loc.range,
+                    loc.range,
+                    originRange
+                )
+            );
+        }
+
+        return navigable.map((loc) =>
+            Location.create(this.convertUriToLspUriString(workspace.service.fs, loc.uri), loc.range)
+        );
+    }
+
+    // The range of the text between the quotes of the string at the position, if
+    // there's one. A key is underlined like a name ('name' as name), all of it even
+    // when it's several words.
+    private _getStringRangeAt(program: ProgramView, uri: Uri, position: Position): Range | undefined {
+        const parseResults = program.getParseResults(uri);
+        if (!parseResults) {
+            return undefined;
+        }
+        const offset = convertPositionToOffset(position, parseResults.tokenizerOutput.lines);
+        if (offset === undefined) {
+            return undefined;
+        }
+        const node = findNodeByOffset(parseResults.parserOutput.parseTree, offset);
+        if (node?.nodeType !== ParseNodeType.String) {
+            return undefined;
+        }
+        const token = node.d.token;
+        const isUnterminated = (token.flags & StringTokenFlags.Unterminated) !== 0;
+        const start = token.start + token.prefixLength + token.quoteMarkLength;
+        const end = token.start + token.length - (isUnterminated ? 0 : token.quoteMarkLength);
+        return end > start ? convertOffsetsToRange(start, end, parseResults.tokenizerOutput.lines) : undefined;
     }
 
     protected async onReferences(

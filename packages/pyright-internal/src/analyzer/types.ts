@@ -10,7 +10,14 @@
 import { partition } from '../common/collectionUtils';
 import { assert } from '../common/debug';
 import { Uri } from '../common/uri/uri';
-import { ArgumentNode, ExpressionNode, NameNode, ParamCategory, TypeAnnotationNode } from '../parser/parseNodes';
+import {
+    ArgumentNode,
+    ExpressionNode,
+    NameNode,
+    ParamCategory,
+    StringListNode,
+    TypeAnnotationNode,
+} from '../parser/parseNodes';
 import {
     ClassDeclaration,
     FunctionDeclaration,
@@ -854,6 +861,11 @@ export interface ClassDetailsPriv {
     //   themselves; they only make reads more precise.
     knownEntries?: Map<string, Type> | undefined;
 
+    // Where each known entry's key was added, for go-to-definition on a key: the key
+    // of a dict display, a keyword argument, the key of an index write. Not part of
+    // the type's identity (isTypeSame ignores it).
+    knownEntryOrigins?: Map<string, NameNode | StringListNode> | undefined;
+
     // Indicates whether the class is an asymmetric descriptor
     // or property - one where the __get__ and __set__ types differ.
     // If undefined, it hasn't been tested yet for asymmetry.
@@ -1073,9 +1085,29 @@ export namespace ClassType {
         return newClassType;
     }
 
-    export function cloneForKnownEntries(classType: ClassType, entries: Map<string, Type> | undefined): ClassType {
+    // Without origins, the entries keep the origins they had in classType (for the
+    // keys still present).
+    export function cloneForKnownEntries(
+        classType: ClassType,
+        entries: Map<string, Type> | undefined,
+        origins?: Map<string, NameNode | StringListNode>
+    ): ClassType {
         const newClassType = TypeBase.cloneType(classType);
         newClassType.priv.knownEntries = entries;
+
+        if (!entries) {
+            newClassType.priv.knownEntryOrigins = undefined;
+        } else if (origins) {
+            newClassType.priv.knownEntryOrigins = origins;
+        } else if (classType.priv.knownEntryOrigins) {
+            const keptOrigins = new Map<string, NameNode | StringListNode>();
+            classType.priv.knownEntryOrigins.forEach((origin, key) => {
+                if (entries.has(key)) {
+                    keptOrigins.set(key, origin);
+                }
+            });
+            newClassType.priv.knownEntryOrigins = keptOrigins;
+        }
         return newClassType;
     }
 

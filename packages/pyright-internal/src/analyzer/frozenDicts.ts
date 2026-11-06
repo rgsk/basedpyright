@@ -22,6 +22,7 @@ import {
     DictionaryNode,
     ExpressionNode,
     IndexNode,
+    NameNode,
     ParseNodeType,
     StringListNode,
 } from '../parser/parseNodes';
@@ -70,13 +71,37 @@ export function applyFrozenDictEntries(
 
     // A frozendict's entries are exact, so they can't come from a dict's.
     const allowInexact = !isFrozenDictClass(returnType);
-    const entries = getEntriesFromArgs(evaluator, argList, valueType, allowInexact, expectedType);
-    return entries ? ClassType.cloneForKnownEntries(returnType, entries) : returnType;
+    const result = getEntriesFromArgs(evaluator, argList, valueType, allowInexact, expectedType);
+    return result ? ClassType.cloneForKnownEntries(returnType, result.entries, result.origins) : returnType;
 }
 
+// Where a key was added (see ClassType's knownEntryOrigins).
+type KeyOrigin = NameNode | StringListNode;
+
 // Where an entry's value comes from: an expression whose type is yet to be
-// evaluated (and widened), or the known entry of another frozendict.
-type EntrySource = { expr: ExpressionNode } | { type: Type };
+// evaluated (and widened), or the known entry of another frozendict. And where
+// its key was added, if known.
+type EntrySource = ({ expr: ExpressionNode } | { type: Type }) & { origin?: KeyOrigin | undefined };
+
+// Sets a key's source. A key given again keeps the origin it was first added at.
+function setSource(sources: Map<string, EntrySource>, key: string, source: EntrySource) {
+    const origin = sources.get(key)?.origin ?? source.origin;
+    sources.set(key, { ...source, origin });
+}
+
+function getOrigins(sources: Map<string, EntrySource>): Map<string, KeyOrigin> {
+    const origins = new Map<string, KeyOrigin>();
+    sources.forEach((source, key) => {
+        if (source.origin) {
+            origins.set(key, source.origin);
+        }
+    });
+    return origins;
+}
+
+function getKeyOrigin(node: ExpressionNode): KeyOrigin | undefined {
+    return node.nodeType === ParseNodeType.StringList ? node : undefined;
+}
 
 // Supports keyword arguments, optionally preceded by a single mapping, plus
 // **unpacking: frozendict(a=1), frozendict({'a': 1}, b=2), frozendict(other, b=2),
@@ -88,7 +113,7 @@ function getEntriesFromArgs(
     valueType: Type,
     allowInexact: boolean,
     expectedType: Type | undefined
-): Map<string, Type> | undefined {
+): { entries: Map<string, Type>; origins: Map<string, KeyOrigin> } | undefined {
     // A later key replaces the value of an earlier one but keeps its position,
     // as at runtime. A Map does the same.
     const sources = new Map<string, EntrySource>();
@@ -96,7 +121,9 @@ function getEntriesFromArgs(
         return undefined;
     }
 
-    return sources.size > 0 ? resolveEntries(evaluator, sources, valueType, allowInexact, expectedType) : undefined;
+    const entries =
+        sources.size > 0 ? resolveEntries(evaluator, sources, valueType, allowInexact, expectedType) : undefined;
+    return entries ? { entries, origins: getOrigins(sources) } : undefined;
 }
 
 // Adds the entries given by the arguments of a call to the frozendict or dict
@@ -125,7 +152,7 @@ function addEntriesFromArgs(
         }
 
         if (arg.name) {
-            sources.set(arg.name.d.value, { expr: arg.valueExpression });
+            setSource(sources, arg.name.d.value, { expr: arg.valueExpression, origin: arg.name });
             continue;
         }
 
@@ -175,21 +202,20 @@ export function applyFrozenDictMerge(
     }
 
     const entries = resolveEntries(evaluator, sources, valueType, allowInexact);
-    return entries ? ClassType.cloneForKnownEntries(resultType, entries) : resultType;
+    return entries ? ClassType.cloneForKnownEntries(resultType, entries, getOrigins(sources)) : resultType;
 }
 
 // Adds the entries of a frozendict with known entries, or with allowInexact, of a dict
 // with known entries. Returns false for any other type.
 function addKnownEntries(type: Type, sources: Map<string, EntrySource>, allowInexact: boolean): boolean {
-    if (
-        !isClassInstance(type) ||
-        !type.priv.knownEntries ||
-        (!allowInexact && !ClassType.hasExactKnownEntries(type))
-    ) {
+    if (!isClassInstance(type) || !type.priv.knownEntries || (!allowInexact && !ClassType.hasExactKnownEntries(type))) {
         return false;
     }
 
-    type.priv.knownEntries.forEach((entryType, key) => sources.set(key, { type: entryType }));
+    const origins = type.priv.knownEntryOrigins;
+    type.priv.knownEntries.forEach((entryType, key) =>
+        setSource(sources, key, { type: entryType, origin: origins?.get(key) })
+    );
     return true;
 }
 
@@ -219,7 +245,7 @@ export function applyDictDisplayEntries(
     }
 
     const entries = resolveEntries(evaluator, sources, valueType, /* allowInexact */ true, expectedType);
-    return entries ? ClassType.cloneForKnownEntries(type, entries) : type;
+    return entries ? ClassType.cloneForKnownEntries(type, entries, getOrigins(sources)) : type;
 }
 
 // Adds the entries of a dict display such as {'a': 1, **other}. Returns false if
@@ -251,7 +277,10 @@ function addDictDisplayEntries(
             return false;
         }
 
-        sources.set(keyType.priv.literalValue, { expr: entry.d.valueExpr });
+        setSource(sources, keyType.priv.literalValue, {
+            expr: entry.d.valueExpr,
+            origin: getKeyOrigin(entry.d.keyExpr),
+        });
     }
 
     return true;
@@ -563,6 +592,7 @@ function applyFrozenDictFromKeys(evaluator: TypeEvaluator, node: CallNode, class
     }
 
     const entries = new Map<string, Type>();
+    const origins = new Map<string, KeyOrigin>();
     for (const keyExpr of keysExpr.d.items) {
         const keyType = evaluator.getTypeOfExpression(keyExpr).type;
         if (
@@ -573,9 +603,13 @@ function applyFrozenDictFromKeys(evaluator: TypeEvaluator, node: CallNode, class
             return returnType;
         }
         entries.set(keyType.priv.literalValue, valueType);
+        const origin = getKeyOrigin(keyExpr);
+        if (origin && !origins.has(keyType.priv.literalValue)) {
+            origins.set(keyType.priv.literalValue, origin);
+        }
     }
 
-    return entries.size > 0 ? ClassType.cloneForKnownEntries(returnType, entries) : returnType;
+    return entries.size > 0 ? ClassType.cloneForKnownEntries(returnType, entries, origins) : returnType;
 }
 
 function removeKnownEntries(type: Type): Type {
@@ -623,6 +657,18 @@ export function hasDictWithKnownEntries(type: Type): boolean {
     return found;
 }
 
+// The origins of a dict's entries after its key is set: unchanged if the key was
+// already known (it keeps where it was first added), else with the key's origin.
+// Undefined to keep the dict's origins as they are.
+function addOrigin(type: ClassType, key: string, origin: KeyOrigin | undefined): Map<string, KeyOrigin> | undefined {
+    if (!origin || type.priv.knownEntries?.has(key)) {
+        return undefined;
+    }
+    const origins = new Map(type.priv.knownEntryOrigins);
+    origins.set(key, origin);
+    return origins;
+}
+
 // The string value of a literal key, or undefined for any other key (including
 // a union of literals: any one of them may be the key).
 function getLiteralKey(evaluator: TypeEvaluator, keyExpr: ExpressionNode): string | undefined {
@@ -659,7 +705,8 @@ export function applyDictIndexWrite(
     type: Type,
     key: string | undefined,
     assignedType: Type | undefined,
-    isUnknownValue = false
+    isUnknownValue = false,
+    keyNode?: ExpressionNode
 ): Type {
     return mapSubtypes(type, (subtype) => {
         if (!isDictWithKnownEntries(subtype)) {
@@ -675,9 +722,12 @@ export function applyDictIndexWrite(
         const entries = new Map(subtype.priv.knownEntries);
         if (assignedType && !isUnknownValue) {
             entries.set(key, stripLiteralsInTuples(evaluator, assignedType));
-        } else {
-            entries.delete(key);
+            // A write that adds the key is where it was added.
+            const origin = keyNode ? getKeyOrigin(keyNode) : undefined;
+            return ClassType.cloneForKnownEntries(subtype, entries, addOrigin(subtype, key, origin));
         }
+
+        entries.delete(key);
         return ClassType.cloneForKnownEntries(subtype, entries);
     });
 }
@@ -702,8 +752,8 @@ export function applyDictMutatorCall(evaluator: TypeEvaluator, type: Type, node:
         }
 
         const entries = subtype.priv.knownEntries!;
-        const withEntries = (newEntries: Map<string, Type> | undefined) =>
-            ClassType.cloneForKnownEntries(subtype, newEntries);
+        const withEntries = (newEntries: Map<string, Type> | undefined, origins?: Map<string, KeyOrigin>) =>
+            ClassType.cloneForKnownEntries(subtype, newEntries, origins);
 
         switch (methodName) {
             case 'clear': {
@@ -748,13 +798,15 @@ export function applyDictMutatorCall(evaluator: TypeEvaluator, type: Type, node:
                         ? stripLiteralsInTuples(evaluator, evaluator.getTypeOfExpression(args[1].d.valueExpr).type)
                         : evaluator.getNoneType()
                 );
-                return withEntries(newEntries);
+                return withEntries(newEntries, addOrigin(subtype, key, getKeyOrigin(args[0].d.valueExpr)));
             }
 
             case 'update': {
                 const valueType = subtype.priv.typeArgs?.[1];
                 const sources = new Map<string, EntrySource>();
-                entries.forEach((entryType, key) => sources.set(key, { type: entryType }));
+                entries.forEach((entryType, key) =>
+                    setSource(sources, key, { type: entryType, origin: subtype.priv.knownEntryOrigins?.get(key) })
+                );
 
                 const argList: Arg[] = args.map((arg) => ({
                     argCategory: arg.d.argCategory,
@@ -765,7 +817,8 @@ export function applyDictMutatorCall(evaluator: TypeEvaluator, type: Type, node:
                     return withEntries(undefined);
                 }
 
-                return withEntries(resolveEntries(evaluator, sources, valueType, /* allowInexact */ true));
+                const newEntries = resolveEntries(evaluator, sources, valueType, /* allowInexact */ true);
+                return withEntries(newEntries, newEntries ? getOrigins(sources) : undefined);
             }
         }
 

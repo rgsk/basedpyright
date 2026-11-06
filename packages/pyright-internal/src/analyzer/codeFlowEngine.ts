@@ -493,7 +493,14 @@ export function getCodeFlowEngine(
 
                 // Otherwise (as in "for x['key'] in ..."), the key's value is unknown: its
                 // entry is removed, so reads fall back to the dict's value type.
-                return applyDictIndexWrite(evaluator, type, key, assignedType, /* isUnknownValue */ !assignedType);
+                return applyDictIndexWrite(
+                    evaluator,
+                    type,
+                    key,
+                    assignedType,
+                    /* isUnknownValue */ !assignedType,
+                    targetNode.d.items[0].d.valueExpr
+                );
             }
 
             function preventRecursion<T>(flowNode: FlowNode, callback: () => T): T {
@@ -593,11 +600,7 @@ export function getCodeFlowEngine(
                                     return flowTypeResult;
                                 });
 
-                                return setCacheEntry(
-                                    curFlowNode,
-                                    mutatedResult.type,
-                                    !!mutatedResult.isIncomplete
-                                );
+                                return setCacheEntry(curFlowNode, mutatedResult.type, !!mutatedResult.isIncomplete);
                             }
 
                             // A type narrowed for x['key'] no longer applies if the call
@@ -698,9 +701,8 @@ export function getCodeFlowEngine(
 
                                     if (flowTypeResult.type) {
                                         if (isTypedDictKeyAssignment) {
-                                            const keyValue = (
-                                                targetNode.d.items[0].d.valueExpr as StringListNode
-                                            ).d.strings[0].d.value;
+                                            const keyValue = (targetNode.d.items[0].d.valueExpr as StringListNode).d
+                                                .strings[0].d.value;
                                             flowTypeResult.type = mapSubtypes(flowTypeResult.type, (subtype) => {
                                                 if (isClass(subtype) && ClassType.isTypedDictClass(subtype)) {
                                                     return narrowForKeyAssignment(subtype, keyValue);
@@ -718,11 +720,7 @@ export function getCodeFlowEngine(
                                     return flowTypeResult;
                                 });
 
-                                return setCacheEntry(
-                                    curFlowNode,
-                                    narrowedResult?.type,
-                                    !!narrowedResult?.isIncomplete
-                                );
+                                return setCacheEntry(curFlowNode, narrowedResult?.type, !!narrowedResult?.isIncomplete);
                             }
 
                             if (isPartialMatchingExpression(reference, targetNode)) {

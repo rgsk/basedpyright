@@ -18,6 +18,9 @@ export interface ClientCapabilities {
     hasHierarchicalDocumentSymbolCapability: boolean;
     hasWindowProgressCapability: boolean;
     hasGoToDeclarationCapability: boolean;
+    // Client accepts LocationLinks for go-to-definition, whose originSelectionRange
+    // sets the span that's underlined on ctrl+hover.
+    hasDefinitionLinkCapability: boolean;
     hasDocumentChangeCapability: boolean;
     hasDocumentAnnotationCapability: boolean;
     hasCompletionCommitCharCapability: boolean;

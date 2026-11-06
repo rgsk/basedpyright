@@ -22,6 +22,7 @@ import { ServiceProvider } from '../common/serviceProvider';
 import { Uri } from '../common/uri/uri';
 import { UriEx } from '../common/uri/uriUtils';
 import { CompletionProvider } from '../languageService/completionProvider';
+import { DefinitionFilter, DefinitionProvider } from '../languageService/definitionProvider';
 import { parseTestData } from './harness/fourslash/fourSlashParser';
 import { TestAccessHost } from './harness/testAccessHost';
 import * as host from './harness/testHost';
@@ -551,6 +552,52 @@ test('dict known entries complete in later cells', () => {
         assert(
             labels.includes(`'${key}'`) || labels.includes(`"${key}"`),
             `${key} in ${JSON.stringify(labels.slice(0, 20))}`
+        );
+    }
+});
+
+test('dict key go-to-definition jumps to an earlier cell', () => {
+    const code = `
+// @filename: test1.py
+//// user = {[|'name'|]: "rahul"}
+
+// @filename: test2.py
+//// user[[|'city'|]] = "delhi"
+
+// @filename: test3.py
+//// user[/*name*/'name']
+//// user[/*city*/'city']
+    `;
+
+    const basePath = UriEx.file(normalizeSlashes('/'));
+    const { data, service } = createServiceWithChainedSourceFiles(basePath, code);
+    analyze(service.test_program);
+
+    for (const [markerName, rangeIndex] of [
+        ['name', 0],
+        ['city', 1],
+    ] as const) {
+        const marker = data.markerPositions.get(markerName)!;
+        const parseResult = service.getParseResults(marker.fileUri)!;
+        const definitions = new DefinitionProvider(
+            service.test_program,
+            marker.fileUri,
+            convertOffsetToPosition(marker.position + 1, parseResult.tokenizerOutput.lines),
+            DefinitionFilter.PreferSource,
+            CancellationToken.None
+        ).getDefinitions();
+
+        const expected = data.ranges[rangeIndex];
+        const expectedLines = service.getParseResults(expected.fileUri)!.tokenizerOutput.lines;
+        assert.deepStrictEqual(
+            definitions?.map((d) => ({ uri: d.uri.key, range: d.range })),
+            [
+                {
+                    uri: expected.fileUri.key,
+                    range: convertOffsetsToRange(expected.pos, expected.end, expectedLines),
+                },
+            ],
+            markerName
         );
     }
 });

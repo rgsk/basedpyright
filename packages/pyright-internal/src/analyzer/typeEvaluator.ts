@@ -162,6 +162,7 @@ import {
 import {
     applyDictDisplayEntries,
     applyFrozenDictMethodCall,
+    getLiteralKeyOfIndex,
     hasDictWithKnownEntries,
     removeDictKnownEntries,
     getTypeOfIndexedFrozenDict,
@@ -12957,7 +12958,7 @@ export function createTypeEvaluator(
                             knownItems = argType.priv.knownEntries;
                             extraItemsType = ClassType.hasExactKnownEntries(argType)
                                 ? NeverType.createNever()
-                                : (argType.priv.typeArgs?.[1] ?? UnknownType.create());
+                                : argType.priv.typeArgs?.[1] ?? UnknownType.create();
 
                             // As with any dict, a parameter that none of its known keys
                             // matches may get its value from a key the checker hasn't seen.
@@ -13051,8 +13052,8 @@ export function createTypeEvaluator(
                                     (!argType.priv.knownEntries
                                         ? LocMessage.unpackedTypedDictArgument()
                                         : ClassType.hasExactKnownEntries(argType)
-                                          ? LocMessage.unpackedFrozenDictArgument()
-                                          : LocMessage.unpackedDictArgument()) + diag.getString(),
+                                        ? LocMessage.unpackedFrozenDictArgument()
+                                        : LocMessage.unpackedDictArgument()) + diag.getString(),
                                     argList[argIndex].valueExpression || errorNode
                                 );
                             }
@@ -24134,7 +24135,58 @@ export function createTypeEvaluator(
             });
         }
 
+        // A key of a dict or frozendict with known entries (user['name']) is declared
+        // where it was added: the key of a dict display, a keyword argument, the key of
+        // an index write that added it.
+        if (decls.length === 0) {
+            const declForKey = getDeclForKnownEntryKey(node);
+            if (declForKey) {
+                decls.push(declForKey);
+            }
+        }
+
         return decls.length === 0 ? undefined : { decls, synthesizedTypes };
+    }
+
+    function getDeclForKnownEntryKey(node: StringNode): VariableDeclaration | undefined {
+        const stringList = node.parent;
+        const arg = stringList?.parent;
+        const indexNode = arg?.parent;
+        if (
+            stringList?.nodeType !== ParseNodeType.StringList ||
+            arg?.nodeType !== ParseNodeType.Argument ||
+            indexNode?.nodeType !== ParseNodeType.Index ||
+            indexNode.d.items.length !== 1 ||
+            indexNode.d.items[0] !== arg
+        ) {
+            return undefined;
+        }
+
+        const key = getLiteralKeyOfIndex(evaluatorInterface, indexNode);
+        if (key === undefined) {
+            return undefined;
+        }
+
+        // The first subtype that knows where the key was added.
+        let origin: NameNode | StringListNode | undefined;
+        doForEachSubtype(getTypeOfExpression(indexNode.d.leftExpr).type, (subtype) => {
+            if (!origin && isClassInstance(subtype)) {
+                origin = subtype.priv.knownEntryOrigins?.get(key);
+            }
+        });
+        if (!origin || origin === stringList) {
+            return undefined;
+        }
+
+        const fileInfo = nodeInfo.getFileInfo(origin);
+        return {
+            type: DeclarationType.Variable,
+            node: origin,
+            uri: fileInfo.fileUri,
+            range: convertOffsetsToRange(origin.start, TextRange.getEnd(origin), fileInfo.lines),
+            moduleName: fileInfo.moduleName,
+            isInExceptSuite: false,
+        };
     }
 
     function getAliasFromImport(node: NameNode): NameNode | undefined {
