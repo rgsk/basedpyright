@@ -7,6 +7,7 @@ import {
     isAny,
     isAnyOrUnknown,
     isClass,
+    isClassInstance,
     isFunction,
     isFunctionOrOverloaded,
     isInstantiableClass,
@@ -23,16 +24,21 @@ import {
     TypeCategory,
 } from './types';
 import {
+    ArgCategory,
     ClassNode,
     DecoratorNode,
+    DictionaryKeyEntryNode,
     ExpressionNode,
     FunctionNode,
+    IndexNode,
     MemberAccessNode,
     NameNode,
     ParameterNode,
     ParseNodeType,
+    StringListNode,
     TypeAliasNode,
 } from '../parser/parseNodes';
+import { StringTokenFlags } from '../parser/tokenizerTypes';
 import { SemanticTokenModifiers, SemanticTokenTypes } from 'vscode-languageserver';
 import { CustomSemanticTokenModifiers, CustomSemanticTokenTypes } from '../languageService/semanticTokensProvider';
 import { Declaration, DeclarationType, isFunctionDeclaration, isVariableDeclaration } from './declaration';
@@ -42,7 +48,15 @@ import { assertNever } from '../common/debug';
 import { getDeclaration } from './analyzerNodeInfo';
 import { isDeclInEnumClass } from './enums';
 import { getEnclosingClass, isWriteAccess } from './parseTreeUtils';
-import { ClassMember, MemberAccessFlags, allSubtypes, isProperty, lookUpClassMember } from './typeUtils';
+import {
+    ClassMember,
+    MemberAccessFlags,
+    allSubtypes,
+    doForEachSubtype,
+    isProperty,
+    lookUpClassMember,
+} from './typeUtils';
+import { getTypedDictMembersForClass } from './typedDicts';
 
 type TokenTypes = SemanticTokenTypes | CustomSemanticTokenTypes;
 type TokenModifiers = SemanticTokenModifiers | CustomSemanticTokenModifiers;
@@ -142,6 +156,123 @@ export class SemanticTokensWalker extends ParseTreeWalker {
         // `def`, `class` and `lambda` which are blue but i can't figure out what semantic token type does that.
         this._addItem(node.start, 4 /* length of the word "type" */, SemanticTokenTypes.keyword, []);
         return super.visitTypeAlias(node);
+    }
+
+    // A string key of a dict display ({'name': 'rahul'}) is colored like an attribute,
+    // quotes included, so keys and values are told apart at a glance.
+    override visitDictionaryKeyEntry(node: DictionaryKeyEntryNode): boolean {
+        if (this._isPlainStringList(node.d.keyExpr)) {
+            this._addItemsForKey(node.d.keyExpr, []);
+        }
+        return super.visitDictionaryKeyEntry(node);
+    }
+
+    // A string subscript key (user['name']) is colored like an attribute when it's a
+    // known key of the subscripted dict, frozendict or TypedDict, and left as a string
+    // otherwise, so a mistyped key stands out. A write that adds a key to a dict with
+    // known entries (user['city'] = ...) is colored too, as a dict display key is.
+    // Frozendict keys and read-only TypedDict keys are readonly.
+    override visitIndex(node: IndexNode): boolean {
+        const keyExpr = node.d.items.length === 1 && !node.d.trailingComma ? node.d.items[0] : undefined;
+        if (
+            keyExpr &&
+            !keyExpr.d.name &&
+            keyExpr.d.argCategory === ArgCategory.Simple &&
+            this._isPlainStringList(keyExpr.d.valueExpr)
+        ) {
+            const stringList = keyExpr.d.valueExpr;
+            const key = stringList.d.strings.map((s) => s.d.value).join('');
+            const modifiers = this._getKnownKeyModifiers(node, key);
+            if (modifiers) {
+                this._addItemsForKey(stringList, modifiers);
+            }
+        }
+        return super.visitIndex(node);
+    }
+
+    // Whether a key's quotes (and any prefix) are colored with it: 'name' as one
+    // block, rather than name colored between string-colored quotes.
+    private static readonly _colorKeyQuotes = true;
+
+    private _addItemsForKey(node: StringListNode, modifiers: TokenModifiers[]) {
+        modifiers = [...modifiers, CustomSemanticTokenModifiers.key];
+        if (SemanticTokensWalker._colorKeyQuotes) {
+            this._addItem(node.start, node.length, SemanticTokenTypes.property, modifiers);
+            return;
+        }
+
+        // One item per string of an implicit concatenation ('first' 'name').
+        for (const str of node.d.strings) {
+            const token = str.d.token;
+            const isUnterminated = (token.flags & StringTokenFlags.Unterminated) !== 0;
+            const start = token.start + token.prefixLength + token.quoteMarkLength;
+            const end = token.start + token.length - (isUnterminated ? 0 : token.quoteMarkLength);
+            if (end > start) {
+                this._addItem(start, end - start, SemanticTokenTypes.property, modifiers);
+            }
+        }
+    }
+
+    private _isPlainStringList(node: ExpressionNode): node is StringListNode {
+        return (
+            node.nodeType === ParseNodeType.StringList &&
+            node.d.strings.every(
+                (s) =>
+                    s.nodeType === ParseNodeType.String &&
+                    (s.d.token.flags &
+                        (StringTokenFlags.Format | StringTokenFlags.Template | StringTokenFlags.Bytes)) ===
+                        0
+            )
+        );
+    }
+
+    // The modifiers for a key known to every subtype of the subscripted type, or
+    // undefined if one of them doesn't know it.
+    private _getKnownKeyModifiers(node: IndexNode, key: string): TokenModifiers[] | undefined {
+        const baseType = this._getType(node.d.leftExpr);
+        if (!baseType) {
+            return undefined;
+        }
+
+        const parent = node.parent;
+        const isWrite =
+            (parent?.nodeType === ParseNodeType.Assignment && parent.d.leftExpr === node) ||
+            (parent?.nodeType === ParseNodeType.AugmentedAssignment && parent.d.leftExpr === node);
+
+        let isKnown = true;
+        let isReadOnly = true;
+        doForEachSubtype(baseType, (subtype) => {
+            if (!isClassInstance(subtype)) {
+                isKnown = false;
+                return;
+            }
+            if (ClassType.isTypedDictClass(subtype)) {
+                const entry = getTypedDictMembersForClass(
+                    this._evaluator,
+                    subtype,
+                    /* allowNarrowed */ true
+                ).knownItems.get(key);
+                if (!entry) {
+                    isKnown = false;
+                } else if (!entry.isReadOnly) {
+                    isReadOnly = false;
+                }
+                return;
+            }
+            const entries = subtype.priv.knownEntries;
+            if (!entries || (!entries.has(key) && !(isWrite && !ClassType.hasExactKnownEntries(subtype)))) {
+                isKnown = false;
+                return;
+            }
+            if (!ClassType.hasExactKnownEntries(subtype)) {
+                isReadOnly = false;
+            }
+        });
+
+        if (!isKnown) {
+            return undefined;
+        }
+        return isReadOnly ? [SemanticTokenModifiers.readonly] : [];
     }
 
     private _visitNameWithDeclarations(node: NameNode, declarations: Declaration[]) {

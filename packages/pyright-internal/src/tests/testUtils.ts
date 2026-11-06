@@ -151,8 +151,8 @@ export function typeAnalyzeSampleFiles(
     return results;
 }
 
-export const semanticTokenizeSampleFile = (fileName: string): SemanticTokenItem[] => {
-    const program = createProgram();
+export const semanticTokenizeSampleFile = (fileName: string, configOptions?: ConfigOptionsArg): SemanticTokenItem[] => {
+    const program = createProgram(configOptions);
     const fileUri = UriEx.file(resolveSampleFilePath(path.join('semantic_highlighting', fileName)));
     program.setTrackedFiles([fileUri]);
     const walker = new SemanticTokensWalker(program.evaluator!);

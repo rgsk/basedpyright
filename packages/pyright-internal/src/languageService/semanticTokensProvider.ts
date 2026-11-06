@@ -29,6 +29,12 @@ export enum CustomSemanticTokenModifiers {
      * about whether or not it is a parameter.
      */
     parameter = 'parameter',
+    /**
+     * A string key of a dict, frozendict or TypedDict ({'name': ...}, user['name']), colored
+     * as a property. The modifier lets a theme give keys their own color, apart from
+     * attributes and variables ({'q': q} otherwise colors key and value alike).
+     */
+    key = 'key',
 }
 
 export const tokenTypes: string[] = [
@@ -59,6 +65,7 @@ export const tokenModifiers: string[] = [
     CustomSemanticTokenModifiers.builtin,
     CustomSemanticTokenModifiers.classMember,
     CustomSemanticTokenModifiers.parameter,
+    CustomSemanticTokenModifiers.key,
 ];
 
 export const SemanticTokensProviderLegend = {

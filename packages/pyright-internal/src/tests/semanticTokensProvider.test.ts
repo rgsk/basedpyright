@@ -1,4 +1,9 @@
-import { semanticTokenizeSampleFile } from './testUtils';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { ConfigOptions } from '../common/configOptions';
+import { pythonVersion3_15 } from '../common/pythonVersion';
+import { Uri } from '../common/uri/uri';
+import { resolveSampleFilePath, semanticTokenizeSampleFile } from './testUtils';
 
 //TODO: these tests have different start positions in ci on windows, i assume because of crlf moment
 if (process.platform !== 'win32' || !process.env['CI']) {
@@ -938,6 +943,24 @@ if (process.platform !== 'win32' || !process.env['CI']) {
                 { type: 'variable', modifiers: ['builtin'], start: 117, length: 11 },
             ]);
         });
+    });
+    test('dict keys', () => {
+        const text = readFileSync(resolveSampleFilePath(join('semantic_highlighting', 'dict_keys.py')), 'utf8');
+        const configOptions = new ConfigOptions(Uri.empty());
+        configOptions.defaultPythonVersion = pythonVersion3_15;
+        const keys = semanticTokenizeSampleFile('dict_keys.py', configOptions)
+            .filter((item) => item.type === 'property' && text[item.start] === '"')
+            .map((item) => [text.slice(item.start, item.start + item.length), item.modifiers]);
+        expect(keys).toStrictEqual([
+            ['"a"', ['key']], // dict display key, though the dict has no known entries
+            ['"name"', ['key']], // dict display key
+            ['"name"', ['key']], // known key
+            ['"city"', ['key']], // write that adds a key
+            ['"city"', ['key']], // key added by the write
+            ['"title"', ['key']], // TypedDict key
+            ['"year"', ['readonly', 'key']], // ReadOnly TypedDict key
+            ['"name"', ['readonly', 'key']], // frozendict key
+        ]);
     });
 } else {
     // prevent jest from failing because no tests were found
