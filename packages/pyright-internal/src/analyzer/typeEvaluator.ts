@@ -164,6 +164,7 @@ import {
     applyFrozenDictMethodCall,
     getLiteralKeyOfIndex,
     hasDictWithKnownEntries,
+    isWideningDictUpdate,
     removeDictKnownEntries,
     getTypeOfIndexedFrozenDict,
     isFrozenDictClass,
@@ -5738,13 +5739,40 @@ export function createTypeEvaluator(
             typeAtStart = flowTypeResult.type;
         }
 
+        if (!hasDictWithKnownEntries(typeAtStart)) {
+            return undefined;
+        }
+        const typeWithoutEntries = removeDictKnownEntries(typeAtStart);
         if (
-            !hasDictWithKnownEntries(typeAtStart) ||
-            !isTypeSame(removeDictKnownEntries(typeAtStart), effectiveType, { honorTypeForm: true })
+            !isTypeSame(typeWithoutEntries, effectiveType, { honorTypeForm: true }) &&
+            !isWidenedDict(typeWithoutEntries, effectiveType)
         ) {
             return undefined;
         }
         return typeAtStart;
+    }
+
+    // Whether the dict type is the effective dict type with a wider value type, as
+    // after x.update(...) with values of a new type (see isWideningDictUpdate).
+    function isWidenedDict(type: Type, effectiveType: Type): boolean {
+        if (
+            !isClassInstance(type) ||
+            !isClassInstance(effectiveType) ||
+            !ClassType.isBuiltIn(type, 'dict') ||
+            !ClassType.isSameGenericClass(type, effectiveType)
+        ) {
+            return false;
+        }
+        const [keyType, valueType] = type.priv.typeArgs ?? [];
+        const [effectiveKeyType, effectiveValueType] = effectiveType.priv.typeArgs ?? [];
+        return (
+            !!keyType &&
+            !!valueType &&
+            !!effectiveKeyType &&
+            !!effectiveValueType &&
+            isTypeSame(keyType, effectiveKeyType) &&
+            assignType(valueType, effectiveValueType)
+        );
     }
 
     // Handles the case where a variable or parameter is defined in an outer
@@ -9295,6 +9323,35 @@ export function createTypeEvaluator(
         return entryTypes;
     }
 
+    // Whether the call is x.update(...) on a dict with known entries that stock pyright
+    // reports as an error, but that code flow analysis applies as x |= ... would,
+    // widening the dict's value type (see isWideningDictUpdate).
+    function isWideningDictUpdateCall(
+        node: CallNode,
+        argList: Arg[],
+        baseTypeResult: TypeResult,
+        inferenceContext: InferenceContext | undefined
+    ): boolean {
+        if (
+            node.d.leftExpr.nodeType !== ParseNodeType.MemberAccess ||
+            node.d.leftExpr.d.member.d.value !== 'update' ||
+            !hasDictWithKnownEntries(getTypeOfExpression(node.d.leftExpr.d.leftExpr).type)
+        ) {
+            return false;
+        }
+        const callResult = useSpeculativeMode(node, () =>
+            validateCallArgs(
+                node,
+                argList,
+                baseTypeResult,
+                /* constraints */ undefined,
+                /* skipUnknownArgCheck */ false,
+                inferenceContext
+            )
+        );
+        return !!callResult.argumentErrors && isWideningDictUpdate(evaluatorInterface, node);
+    }
+
     function getTypeOfCall(
         node: CallNode,
         flags: EvalFlags,
@@ -9374,6 +9431,11 @@ export function createTypeEvaluator(
                 } else {
                     addDiagnostic(DiagnosticRule.reportCallIssue, LocMessage.revealLocalsArgs(), node);
                 }
+            } else if (isWideningDictUpdateCall(node, argList, baseTypeResult, inferenceContext)) {
+                // Like x |= {...}, x.update({...}) merges new values into the dict x
+                // (code flow analysis widens its value type), so it isn't an error.
+                node.d.args.forEach((arg) => getTypeOfExpression(arg.d.valueExpr));
+                typeResult.type = getNoneType();
             } else {
                 const callResult = validateCallArgs(
                     node,

@@ -10,13 +10,15 @@
  * A frozendict can't be mutated, so its known entries are exact: indexing it
  * with an unknown literal key is reported as an error. A dict's known entries
  * are only what the checker has seen of it (code flow analysis updates them on
- * writes it can follow), so they never cause errors by themselves.
+ * writes it can follow), so they never cause errors by themselves. x.update(...)
+ * is applied as x |= ... is, so for a variable without a declared type, values of
+ * a new type widen its value type instead of being an error.
  *
  * PyTorch's nn.ModuleDict built from such a dict (ModuleDict({'body': ...}) or
  * ModuleDict(dict(body=...))) has a dict's kind of known entries, with two
- * differences: any write the checker sees removes them all (a plain ModuleDict
- * again), and while they're there, reading a literal key they don't have is an
- * error. Its self-returning methods (to(), cuda(), train(), ...) are declared to
+ * differences: any write the checker sees other than update() with known keys
+ * removes them all (a plain ModuleDict again), and while they're there, reading a
+ * literal key they don't have is an error. Its self-returning methods (to(), cuda(), train(), ...) are declared to
  * return Self, which keeps them.
  */
 
@@ -29,6 +31,7 @@ import {
     DictionaryNode,
     ExpressionNode,
     IndexNode,
+    MemberAccessNode,
     NameNode,
     ParseNodeType,
     StringListNode,
@@ -778,8 +781,11 @@ export function applyDictMutatorCall(evaluator: TypeEvaluator, type: Type, node:
             return subtype;
         }
 
-        // Any change to a ModuleDict's keys makes it a plain ModuleDict.
+        // Any other change to a ModuleDict's keys makes it a plain ModuleDict.
         if (ClassType.isTorchModuleDict(subtype)) {
+            if (methodName === 'update') {
+                return applyDictUpdate(evaluator, subtype, node) ?? ClassType.cloneForKnownEntries(subtype, undefined);
+            }
             return ClassType.cloneForKnownEntries(subtype, undefined);
         }
 
@@ -834,28 +840,97 @@ export function applyDictMutatorCall(evaluator: TypeEvaluator, type: Type, node:
             }
 
             case 'update': {
-                const valueType = subtype.priv.typeArgs?.[1];
-                const sources = new Map<string, EntrySource>();
-                entries.forEach((entryType, key) =>
-                    setSource(sources, key, { type: entryType, origin: subtype.priv.knownEntryOrigins?.get(key) })
-                );
-
-                const argList: Arg[] = args.map((arg) => ({
-                    argCategory: arg.d.argCategory,
-                    name: arg.d.name,
-                    valueExpression: arg.d.valueExpr,
-                }));
-                if (!valueType || !addEntriesFromArgs(evaluator, argList, sources, /* allowInexact */ true)) {
-                    return withEntries(undefined);
-                }
-
-                const newEntries = resolveEntries(evaluator, sources, valueType, /* allowInexact */ true);
-                return withEntries(newEntries, newEntries ? getOrigins(sources) : undefined);
+                return applyDictUpdate(evaluator, subtype, node) ?? withEntries(undefined);
             }
         }
 
         return subtype;
     });
+}
+
+// x.update(arg) or x.update(k=v, ...) on a dict (or ModuleDict) with known entries,
+// applied as x |= arg would be: the arg's keys are added, replacing the types of
+// keys already known. Undefined if the arg's keys aren't known. The new values must
+// be assignable to the value type, unless the call may widen it (see
+// canWidenDictUpdate): then it's widened to include them, as by x | arg.
+function applyDictUpdate(evaluator: TypeEvaluator, subtype: ClassType, node: CallNode): ClassType | undefined {
+    const isModuleDict = ClassType.isTorchModuleDict(subtype);
+    const args = node.d.args;
+
+    // ModuleDict.update takes a single mapping of modules.
+    if (isModuleDict && (args.length !== 1 || args[0].d.name || args[0].d.argCategory !== ArgCategory.Simple)) {
+        return undefined;
+    }
+
+    const valueType = getValueType(subtype);
+    if (!valueType) {
+        return undefined;
+    }
+
+    const argList: Arg[] = args.map((arg) => ({
+        argCategory: arg.d.argCategory,
+        name: arg.d.name,
+        valueExpression: arg.d.valueExpr,
+    }));
+    const argSources = new Map<string, EntrySource>();
+    if (!addEntriesFromArgs(evaluator, argList, argSources, /* allowInexact */ true)) {
+        return undefined;
+    }
+
+    const sources = new Map<string, EntrySource>();
+    subtype.priv.knownEntries!.forEach((entryType, key) =>
+        setSource(sources, key, { type: entryType, origin: subtype.priv.knownEntryOrigins?.get(key) })
+    );
+    argSources.forEach((source, key) => setSource(sources, key, source));
+
+    const entries = resolveEntries(evaluator, sources, valueType, /* allowInexact */ true);
+    if (entries) {
+        return ClassType.cloneForKnownEntries(subtype, entries, getOrigins(sources));
+    }
+
+    const keyType = subtype.priv.typeArgs?.[0];
+    if (isModuleDict || !keyType || !canWidenDictUpdate(evaluator, node)) {
+        return undefined;
+    }
+
+    const newValueTypes = [...argSources.values()].map((source) =>
+        'type' in source ? source.type : stripLiteralsInTuples(evaluator, evaluator.getTypeOfExpression(source.expr).type)
+    );
+    const widenedValueType = combineTypes([valueType, ...newValueTypes]);
+    const widenedEntries = resolveEntries(evaluator, sources, widenedValueType, /* allowInexact */ true);
+    if (!widenedEntries) {
+        return undefined;
+    }
+    return ClassType.cloneForKnownEntries(
+        ClassType.specialize(subtype, [keyType, widenedValueType]),
+        widenedEntries,
+        getOrigins(sources)
+    );
+}
+
+// Whether x.update(...) may widen the value type of the dict x, as x |= ... may: x
+// is a variable without a declared type, so its inferred type takes any dict.
+function canWidenDictUpdate(evaluator: TypeEvaluator, node: CallNode): boolean {
+    if (node.d.leftExpr.nodeType !== ParseNodeType.MemberAccess || node.d.leftExpr.d.member.d.value !== 'update') {
+        return false;
+    }
+    const receiver = node.d.leftExpr.d.leftExpr;
+    return receiver.nodeType === ParseNodeType.Name && !evaluator.getDeclaredTypeForExpression(receiver);
+}
+
+// For a call x.update(...) that stock pyright reports as an error because the new
+// values don't fit the dict's value type: whether code flow analysis instead merges
+// them into x, widening its value type (as x |= ... does), so the call isn't an error.
+export function isWideningDictUpdate(evaluator: TypeEvaluator, node: CallNode): boolean {
+    if (!canWidenDictUpdate(evaluator, node)) {
+        return false;
+    }
+    const receiverType = evaluator.getTypeOfExpression((node.d.leftExpr as MemberAccessNode).d.leftExpr).type;
+    return (
+        isDictWithKnownEntries(receiverType) &&
+        ClassType.isBuiltIn(receiverType, 'dict') &&
+        !!applyDictUpdate(evaluator, receiverType, node)
+    );
 }
 
 // Code flow analysis: whether a call to one of the methods named in

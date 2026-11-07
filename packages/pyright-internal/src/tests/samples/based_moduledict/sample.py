@@ -41,7 +41,27 @@ assert_type(moved.cuda().train(False).to(dev)["body"], nn.Linear)
 moved.eval()["bdy"]
 
 
-# Any write or mutation makes it a plain ModuleDict, so reads fall back to Module.
+# update() with known keys adds them, as |= would for a dict.
+enc = nn.ModuleDict(dict(convs=nn.Sequential(), out=nn.Linear(128, 8)))
+enc.update(dict(film=nn.Linear(8, 256)))
+reveal_type(enc, expected_text="ModuleDict[{'convs': Sequential, 'out': Linear, 'film': Linear}]")
+assert_type(enc["film"], nn.Linear)
+enc.update({"out": nn.ReLU(), "head": nn.Embedding(3, D)})
+reveal_type(enc, expected_text="ModuleDict[{'convs': Sequential, 'out': ReLU, 'film': Linear, 'head': Embedding}]")
+
+
+def update_unknown(mapping: dict[str, nn.Module]):
+    a = nn.ModuleDict({"x": nn.Linear(1, D)})
+    a.update(mapping)
+    reveal_type(a, expected_text="ModuleDict")
+
+    b = nn.ModuleDict({"x": nn.Linear(1, D)})
+    alias = b
+    alias.update({"y": nn.ReLU()})
+    reveal_type(b, expected_text="ModuleDict[{'x': Linear}]")
+
+
+# Any other write or mutation makes it a plain ModuleDict, so reads fall back to Module.
 def writes():
     a = nn.ModuleDict({"x": nn.Linear(1, D)})
     a["y"] = nn.ReLU()
@@ -51,10 +71,6 @@ def writes():
     b = nn.ModuleDict({"x": nn.Linear(1, D)})
     del b["x"]
     reveal_type(b, expected_text="ModuleDict")
-
-    c = nn.ModuleDict({"x": nn.Linear(1, D)})
-    c.update({"y": nn.ReLU()})
-    reveal_type(c, expected_text="ModuleDict")
 
     d = nn.ModuleDict({"x": nn.Linear(1, D)})
     d.pop("x")

@@ -121,6 +121,61 @@ def update_unknown(other: dict[str, int]) -> None:
     reveal_type(user, expected_text="dict[str, int]")
 
 
+# x.update(...) is applied as x |= ... would be, so values of a new type widen the
+# value type of a dict without a declared type rather than being an error.
+def update_like_ior() -> None:
+    user = {"name": "rahul"}
+    user.update({"b": 20, "c": 3})
+    reveal_type(user, expected_text="dict[{'name': str, 'b': int, 'c': int}]")
+    assert_type(user["b"], int)
+    reveal_type(user.get("zzz"), expected_text="str | int | None")
+
+    built = {"name": "rahul"}
+    built.update(dict(b=20, c=3.5))
+    reveal_type(built, expected_text="dict[{'name': str, 'b': int, 'c': float}]")
+
+    kw = {"name": "rahul"}
+    kw.update(b=20, c=[1])
+    reveal_type(kw, expected_text="dict[{'name': str, 'b': int, 'c': list[int]}]")
+
+    # A key given again gets the new value's type, not a union.
+    over = {"name": "rahul", "age": "27"}
+    over.update({"age": 27})
+    reveal_type(over, expected_text="dict[{'name': str, 'age': int}]")
+    over.update(name=None)
+    reveal_type(over, expected_text="dict[{'name': None, 'age': int}]")
+
+    # From another dict with known entries.
+    extra = {"x": 1.5}
+    merged = {"name": "rahul"}
+    merged.update(extra)
+    reveal_type(merged, expected_text="dict[{'name': str, 'x': float}]")
+
+
+def update_unknown_shape(other: dict[str, int]) -> None:
+    user = {"name": "rahul"}
+    # This should generate an error.
+    user.update(other)
+    reveal_type(user, expected_text="dict[str, str]")
+
+
+def update_declared(other: dict[str, str]) -> None:
+    user: dict[str, str] = {"name": "rahul"}
+    # This should generate an error.
+    user.update({"b": 20})
+    reveal_type(user, expected_text="dict[str, str]")
+    other.update({"x": "y"})
+    reveal_type(other, expected_text="dict[str, str]")
+
+
+def update_alias() -> None:
+    user = {"name": "rahul"}
+    alias = user
+    alias.update({"b": "x"})
+    reveal_type(alias, expected_text="dict[{'name': str, 'b': str}]")
+    reveal_type(user, expected_text="dict[{'name': str}]")
+
+
 def update_ends_narrowing() -> None:
     user = {"name": "rahul", "age": 27}
     user["name"] = "mehak"

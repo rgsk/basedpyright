@@ -624,7 +624,37 @@ test('ModuleDict known entries carry over to later cells', async () => {
 //// core["tu"]
     `;
 
-    // The torch stub of the based_moduledict sample.
+    const errors = await getCellErrors(code, getTorchStubFiles());
+
+    // Only the missing key of the last cell.
+    assert.strictEqual(errors.length, 1, errors.join('\n'));
+    assert.match(errors[0], /test3\.py: Could not access item in ModuleDict/);
+});
+
+test('update() in an earlier cell merges into a dict or ModuleDict', async () => {
+    const code = `
+// @filename: test1.py
+//// from torch import nn
+//// user = {"name": "rahul"}
+//// enc = nn.ModuleDict(dict(out=nn.Linear(128, 8)))
+
+// @filename: test2.py
+//// user.update({"b": 20, "c": 3})
+//// enc.update(dict(film=nn.Linear(8, 256)))
+
+// @filename: test3.py
+//// reveal_type(user, expected_text="dict[{'name': str, 'b': int, 'c': int}]")
+//// reveal_type(user["b"], expected_text="int")
+//// reveal_type(enc, expected_text="ModuleDict[{'out': Linear, 'film': Linear}]")
+//// reveal_type(enc["film"], expected_text="Linear")
+    `;
+
+    const errors = await getCellErrors(code, getTorchStubFiles());
+    assert.deepStrictEqual(errors, []);
+});
+
+// The torch stub of the based_moduledict sample, keyed by path for libFiles.
+function getTorchStubFiles() {
     const stubRoot = resolveSampleFilePath('based_moduledict');
     const libFiles = new Map<string, string>();
     for (const relativePath of [
@@ -636,7 +666,11 @@ test('ModuleDict known entries carry over to later cells', async () => {
     ]) {
         libFiles.set(relativePath, nodeFs.readFileSync(path.join(stubRoot, relativePath), 'utf8'));
     }
+    return libFiles;
+}
 
+// The errors in each cell, as "<file name>: <message>".
+async function getCellErrors(code: string, libFiles?: Map<string, string>) {
     const basePath = UriEx.file(normalizeSlashes('/'));
     const { data, service } = createServiceWithChainedSourceFiles(basePath, code, libFiles);
     analyze(service.test_program);
@@ -653,11 +687,8 @@ test('ModuleDict known entries carry over to later cells', async () => {
             .filter((d) => d.category === DiagnosticCategory.Error)
             .forEach((d) => errors.push(`${file.fileName}: ${d.message}`));
     }
-
-    // Only the missing key of the last cell.
-    assert.strictEqual(errors.length, 1, errors.join('\n'));
-    assert.match(errors[0], /test3\.py: Could not access item in ModuleDict/);
-});
+    return errors;
+}
 
 // libFiles: files to add to the file system (not opened as cells), keyed by their path
 // relative to basePath.

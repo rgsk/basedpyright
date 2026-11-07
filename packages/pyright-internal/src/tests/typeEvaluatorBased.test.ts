@@ -341,7 +341,7 @@ test('dict with literal keys', () => {
     configOptions.defaultPythonVersion = pythonVersion3_15;
     configOptions.diagnosticRuleSet.strictDictionaryInference = true;
     const analysisResults = typeAnalyzeSampleFiles(['based_dict_entries.py'], configOptions);
-    validateResults(analysisResults, 3);
+    validateResults(analysisResults, 7);
 });
 
 test('frozendict from the frozendict package', () => {
