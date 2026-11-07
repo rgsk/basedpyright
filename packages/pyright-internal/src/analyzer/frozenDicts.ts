@@ -18,7 +18,8 @@
  * ModuleDict(dict(body=...))) has a dict's kind of known entries, with two
  * differences: any write the checker sees other than update() with known keys
  * removes them all (a plain ModuleDict again), and while they're there, reading a
- * literal key they don't have is an error. Its self-returning methods (to(), cuda(), train(), ...) are declared to
+ * literal key they don't have is an error (except in a function reading a global
+ * ModuleDict, see knownEntriesFromOuterScope). Its self-returning methods (to(), cuda(), train(), ...) are declared to
  * return Self, which keeps them.
  */
 
@@ -422,7 +423,8 @@ export function getTypeOfIndexedFrozenDict(
         return undefined;
     }
 
-    const isModuleDict = ClassType.isTorchModuleDict(baseType);
+    // A ModuleDict's missing key is an error, unless its entries are an outer scope's.
+    const isModuleDict = ClassType.isTorchModuleDict(baseType) && !baseType.priv.knownEntriesFromOuterScope;
     if (!ClassType.hasExactKnownEntries(baseType) && !isModuleDict) {
         let isEveryKeyKnown = true;
         doForEachSubtype(indexType, (subtype) => {

@@ -5396,9 +5396,11 @@ export function createTypeEvaluator(
                         typeAtStart = type;
                         isTypeAtStartIncomplete = !!outerScopeTypeResult.isIncomplete;
                     } else {
-                        const earlierCellsType = getDictTypeAfterEarlierCells(node, symbolWithScope, effectiveType);
-                        if (earlierCellsType) {
-                            type = earlierCellsType;
+                        const outerDictType =
+                            getDictTypeAfterEarlierCells(node, symbolWithScope, effectiveType) ??
+                            getDictTypeInFunction(node, symbolWithScope, effectiveType);
+                        if (outerDictType) {
+                            type = outerDictType;
                             typeAtStart = type;
                         }
                     }
@@ -5686,16 +5688,7 @@ export function createTypeEvaluator(
         symbolWithScope: SymbolWithScope,
         effectiveType: Type
     ): Type | undefined {
-        let hasDict = false;
-        doForEachSubtype(effectiveType, (subtype) => {
-            if (
-                isClassInstance(subtype) &&
-                (ClassType.isBuiltIn(subtype, 'dict') || ClassType.isTorchModuleDict(subtype))
-            ) {
-                hasDict = true;
-            }
-        });
-        if (!hasDict || symbolWithScope.usesGlobalBinding || symbolWithScope.usesNonlocalBinding) {
+        if (!isDictVariable(symbolWithScope, effectiveType)) {
             return undefined;
         }
 
@@ -5705,9 +5698,101 @@ export function createTypeEvaluator(
             return undefined;
         }
 
+        const typeAtStart = getDictTypeAtStartOfCell(node, symbolWithScope, effectiveType, executionNode);
+        return typeAtStart && getDictTypeIfEffective(typeAtStart, effectiveType);
+    }
+
+    // Handles a module-level variable (of this cell or an earlier one) read inside a
+    // function, lambda or class defined at the top level. A dict's known entries are
+    // those it has where that top-level function or class is defined: the code above
+    // it and the earlier cells. Code that runs before the function is called may have
+    // changed the dict, so the entries are marked as an outer scope's: they make reads
+    // more precise, but a missing key is never an error (see knownEntriesFromOuterScope).
+    // Like a notebook, it's read top to bottom: an assignment below the definition
+    // doesn't change what the function sees.
+    function getDictTypeInFunction(
+        node: NameNode,
+        symbolWithScope: SymbolWithScope,
+        effectiveType: Type
+    ): Type | undefined {
+        if (!isDictVariable(symbolWithScope, effectiveType) || symbolWithScope.scope.type !== ScopeType.Module) {
+            return undefined;
+        }
+
+        // The outermost function, lambda or class that contains the read.
+        let topNode: FunctionNode | LambdaNode | ClassNode | undefined;
+        for (let curNode = node.parent; curNode; curNode = curNode.parent) {
+            if (
+                curNode.nodeType === ParseNodeType.Function ||
+                curNode.nodeType === ParseNodeType.Lambda ||
+                curNode.nodeType === ParseNodeType.Class
+            ) {
+                topNode = curNode;
+            }
+        }
+        const cellNode = topNode && ParseTreeUtils.getExecutionScopeNode(topNode.parent!, nodeInfo);
+        if (!topNode || cellNode?.nodeType !== ParseNodeType.Module) {
+            return undefined;
+        }
+
+        const isDefinedInThisCell = nodeInfo.getScope(cellNode) === symbolWithScope.scope;
+        const typeAtStart = isDefinedInThisCell
+            ? symbolWithScope.symbol.isInitiallyUnbound()
+                ? UnboundType.create()
+                : effectiveType
+            : getDictTypeAtStartOfCell(node, symbolWithScope, effectiveType, cellNode);
+        if (!typeAtStart) {
+            return undefined;
+        }
+
+        const flowTypeResult = getFlowTypeOfReference(node, topNode, {
+            targetSymbolId: symbolWithScope.symbol.id,
+            typeAtStart: { type: typeAtStart },
+        });
+        if (flowTypeResult.isIncomplete) {
+            return undefined;
+        }
+
+        // An assignment below may make the effective type a union: the type here is one of
+        // its dicts.
+        const type = getDictTypeIfEffective(flowTypeResult.type ?? typeAtStart, effectiveType, /* allowSubtype */ true);
+        return (
+            type &&
+            mapSubtypes(type, (subtype) =>
+                isClassInstance(subtype) && subtype.priv.knownEntries
+                    ? ClassType.cloneForOuterScopeEntries(subtype)
+                    : subtype
+            )
+        );
+    }
+
+    // Whether the symbol is a dict or ModuleDict variable whose known entries may carry
+    // into another cell or a function.
+    function isDictVariable(symbolWithScope: SymbolWithScope, effectiveType: Type): boolean {
+        let hasDict = false;
+        doForEachSubtype(effectiveType, (subtype) => {
+            if (
+                isClassInstance(subtype) &&
+                (ClassType.isBuiltIn(subtype, 'dict') || ClassType.isTorchModuleDict(subtype))
+            ) {
+                hasDict = true;
+            }
+        });
+        return hasDict && !symbolWithScope.usesGlobalBinding && !symbolWithScope.usesNonlocalBinding;
+    }
+
+    // The type of a variable defined in an earlier cell at the start of the given cell:
+    // its type at the end of the cell that defines it, with the writes of every cell in
+    // between applied. Undefined if it isn't known.
+    function getDictTypeAtStartOfCell(
+        node: NameNode,
+        symbolWithScope: SymbolWithScope,
+        effectiveType: Type,
+        cellNode: ModuleNode
+    ): Type | undefined {
         // The cells from the one that defines the variable to the one before this.
         const moduleNodes: ModuleNode[] = [];
-        let scope = nodeInfo.getScope(executionNode)?.parent;
+        let scope = nodeInfo.getScope(cellNode)?.parent;
         while (scope?.type === ScopeType.Module && scope.moduleNode) {
             moduleNodes.push(scope.moduleNode);
             if (scope === symbolWithScope.scope) {
@@ -5738,18 +5823,25 @@ export function createTypeEvaluator(
             }
             typeAtStart = flowTypeResult.type;
         }
+        return typeAtStart;
+    }
 
-        if (!hasDictWithKnownEntries(typeAtStart)) {
+    // The type, if it has known entries and is otherwise the effective type (or that
+    // dict with a wider value type, see isWidenedDict; or, with allowSubtype, a type
+    // assignable to it): only its known entries apply.
+    function getDictTypeIfEffective(type: Type, effectiveType: Type, allowSubtype = false): Type | undefined {
+        if (!hasDictWithKnownEntries(type)) {
             return undefined;
         }
-        const typeWithoutEntries = removeDictKnownEntries(typeAtStart);
+        const typeWithoutEntries = removeDictKnownEntries(type);
         if (
             !isTypeSame(typeWithoutEntries, effectiveType, { honorTypeForm: true }) &&
-            !isWidenedDict(typeWithoutEntries, effectiveType)
+            !isWidenedDict(typeWithoutEntries, effectiveType) &&
+            !(allowSubtype && assignType(effectiveType, typeWithoutEntries))
         ) {
             return undefined;
         }
-        return typeAtStart;
+        return type;
     }
 
     // Whether the dict type is the effective dict type with a wider value type, as

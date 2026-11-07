@@ -494,9 +494,9 @@ test('dict known entries carry over to later cells', async () => {
 //// reveal_type(user, expected_text="dict[{'name': str, 'age': str, 'city': str}]")
 //// # Other narrowing isn't carried over, as in stock pyright.
 //// reveal_type(x, expected_text="int")
-//// # Inside a function, it's a global read: a plain dict.
+//// # A function defined here sees the keys of the earlier cells.
 //// def f():
-////     reveal_type(user, expected_text="dict[str, str | int]")
+////     reveal_type(user, expected_text="dict[{'name': str, 'age': str, 'city': str}]")
     `;
 
     const basePath = UriEx.file(normalizeSlashes('/'));
@@ -529,11 +529,53 @@ test('dict known entries complete in later cells', () => {
 //// user[[|/*marker*/|]]
     `;
 
+    const labels = getCompletionLabels(code, 'marker');
+    for (const key of ['name', 'age', 'city']) {
+        assert(
+            labels.includes(`'${key}'`) || labels.includes(`"${key}"`),
+            `${key} in ${JSON.stringify(labels.slice(0, 20))}`
+        );
+    }
+});
+
+test('dict and ModuleDict keys complete inside a function in a later cell', () => {
+    const code = `
+// @filename: test1.py
+//// from torch import nn
+//// user = dict(name="rahul", age=27)
+//// enc = nn.ModuleDict(dict(out=nn.Linear(128, 8)))
+
+// @filename: test2.py
+//// user["city"] = "delhi"
+//// enc.update(dict(film=nn.Linear(8, 256)))
+
+// @filename: test3.py
+//// def draw():
+////     user[[|/*user*/|]]
+////     enc[[|/*enc*/|]]
+    `;
+
+    for (const [markerName, keys] of [
+        ['user', ['name', 'age', 'city']],
+        ['enc', ['out', 'film']],
+    ] as const) {
+        const labels = getCompletionLabels(code, markerName, getTorchStubFiles());
+        for (const key of keys) {
+            assert(
+                labels.includes(`'${key}'`) || labels.includes(`"${key}"`),
+                `${markerName}: ${key} in ${JSON.stringify(labels.slice(0, 20))}`
+            );
+        }
+    }
+});
+
+// The labels of the completions at the marker.
+function getCompletionLabels(code: string, markerName: string, libFiles?: Map<string, string>) {
     const basePath = UriEx.file(normalizeSlashes('/'));
-    const { data, service } = createServiceWithChainedSourceFiles(basePath, code);
+    const { data, service } = createServiceWithChainedSourceFiles(basePath, code, libFiles);
     service.test_program.configOptions.autoImportCompletions = false;
 
-    const marker = data.markerPositions.get('marker')!;
+    const marker = data.markerPositions.get(markerName)!;
     const parseResult = service.getParseResults(marker.fileUri)!;
     const result = new CompletionProvider(
         service.test_program,
@@ -550,14 +592,8 @@ test('dict known entries complete in later cells', () => {
         false
     ).getCompletions();
 
-    const labels = result?.items.map((i) => i.label) ?? [];
-    for (const key of ['name', 'age', 'city']) {
-        assert(
-            labels.includes(`'${key}'`) || labels.includes(`"${key}"`),
-            `${key} in ${JSON.stringify(labels.slice(0, 20))}`
-        );
-    }
-});
+    return result?.items.map((i) => i.label) ?? [];
+}
 
 test('dict key go-to-definition jumps to an earlier cell', () => {
     const code = `
@@ -647,6 +683,12 @@ test('update() in an earlier cell merges into a dict or ModuleDict', async () =>
 //// reveal_type(user["b"], expected_text="int")
 //// reveal_type(enc, expected_text="ModuleDict[{'out': Linear, 'film': Linear}]")
 //// reveal_type(enc["film"], expected_text="Linear")
+//// # A function defined in a later cell sees the keys too; a missing key isn't an error.
+//// def draw():
+////     reveal_type(user, expected_text="dict[{'name': str, 'b': int, 'c': int}]")
+////     reveal_type(enc, expected_text="ModuleDict[{'out': Linear, 'film': Linear}]")
+////     reveal_type(enc["missing"], expected_text="Module")
+////     return enc["out"]
     `;
 
     const errors = await getCellErrors(code, getTorchStubFiles());

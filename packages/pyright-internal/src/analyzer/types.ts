@@ -866,6 +866,12 @@ export interface ClassDetailsPriv {
     // the type's identity (isTypeSame ignores it).
     knownEntryOrigins?: Map<string, NameNode | StringListNode> | undefined;
 
+    // Whether the known entries of a dict or ModuleDict are those of a variable of an
+    // outer scope where a function using it is defined. Code that runs before the
+    // function is called may have changed its keys, so a ModuleDict's missing key isn't
+    // an error then.
+    knownEntriesFromOuterScope?: boolean;
+
     // Indicates whether the class is an asymmetric descriptor
     // or property - one where the __get__ and __set__ types differ.
     // If undefined, it hasn't been tested yet for asymmetry.
@@ -1097,6 +1103,7 @@ export namespace ClassType {
 
         if (!entries) {
             newClassType.priv.knownEntryOrigins = undefined;
+            newClassType.priv.knownEntriesFromOuterScope = undefined;
         } else if (origins) {
             newClassType.priv.knownEntryOrigins = origins;
         } else if (classType.priv.knownEntryOrigins) {
@@ -1111,6 +1118,14 @@ export namespace ClassType {
         return newClassType;
     }
 
+    // The type with its known entries marked as those of an outer scope's variable
+    // (see knownEntriesFromOuterScope).
+    export function cloneForOuterScopeEntries(classType: ClassType): ClassType {
+        const newClassType = TypeBase.cloneType(classType);
+        newClassType.priv.knownEntriesFromOuterScope = true;
+        return newClassType;
+    }
+
     // Whether the known entries of an instance are exact (a frozendict, which can't
     // change) rather than what the checker has seen of a dict so far.
     export function hasExactKnownEntries(classType: ClassType): boolean {
@@ -1121,8 +1136,8 @@ export namespace ClassType {
 
     // PyTorch's nn.ModuleDict (not its subclasses). Built from a dict with literal keys,
     // it has known entries like a dict's: what the checker has seen of it. Unlike a
-    // dict's, any write it sees removes them, and a read of a key they don't have is an
-    // error (see frozenDicts.ts).
+    // dict's, any other write than update() with known keys removes them, and a read of
+    // a key they don't have is an error (see frozenDicts.ts).
     export function isTorchModuleDict(classType: ClassType): boolean {
         return classType.shared.fullName === 'torch.nn.modules.container.ModuleDict';
     }

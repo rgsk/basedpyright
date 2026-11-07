@@ -234,8 +234,47 @@ class Settings:
 counters = {"hits": 0}
 
 
+# A global read in a function has the keys of the code above the function. A missing
+# key is no error, as for any dict.
 def read_global() -> None:
-    reveal_type(counters, expected_text="dict[str, int]")
+    reveal_type(counters, expected_text="dict[{'hits': int}]")
+    assert_type(counters["hits"], int)
+    reveal_type(counters.get("misses"), expected_text="int | None")
+    counters["misses"] = 1
+    reveal_type(counters, expected_text="dict[{'hits': int, 'misses': int}]")
+
+
+class Reader:
+    def read(self) -> None:
+        reveal_type(counters, expected_text="dict[{'hits': int}]")
+
+
+twice = {"a": 1}
+twice = {"b": 2}
+
+
+def read_twice() -> None:
+    # The last assignment above the function.
+    reveal_type(twice, expected_text="dict[{'b': int}]")
+
+
+later = {"a": 1}
+
+
+def read_later() -> None:
+    # Read top to bottom: an assignment below the function doesn't change it.
+    reveal_type(later, expected_text="dict[{'a': int}]")
+
+
+later = {"b": 2}
+other_type = {"a": 1}
+
+
+def read_other_type() -> None:
+    reveal_type(other_type, expected_text="dict[{'a': int}]")
+
+
+other_type = {"b": "x"}
 
 
 def containers() -> None:

@@ -103,10 +103,38 @@ def branches(flag: bool):
     reveal_type(c, expected_text="ModuleDict[{'x': Linear | ReLU}]")
 
 
-# Where code it can't follow may change it, it's plain, as for a dict: a global read
-# in a function, an attribute.
-def elsewhere():
-    reveal_type(core, expected_text="ModuleDict")
+# A global read in a function has the keys of the code above the function, as for a
+# dict. Code that runs before the call may add keys, so a missing one isn't an error.
+def draw():
+    reveal_type(core, expected_text="ModuleDict[{'tau': Linear, 'pos': Embedding, 'act': ReLU}]")
+    reveal_type(enc, expected_text="ModuleDict[{'convs': Sequential, 'out': ReLU, 'film': Linear, 'head': Embedding}]")
+    assert_type(enc["film"], nn.Linear)
+    assert_type(enc["not_yet"], nn.Module)
+    return core["tau"]
+
+
+assert_type(draw(), nn.Linear)
+
+twice = nn.ModuleDict({"a": nn.Linear(1, D)})
+twice = nn.ModuleDict({"b": nn.ReLU()})
+
+
+def read_twice():
+    reveal_type(twice, expected_text="ModuleDict[{'b': ReLU}]")
+
+
+later = nn.ModuleDict({"a": nn.Linear(1, D)})
+
+
+def read_later():
+    # Read top to bottom: an assignment below the function doesn't change it.
+    reveal_type(later, expected_text="ModuleDict[{'a': Linear}]")
+
+
+later = nn.ModuleDict({"b": nn.ReLU()})
+
+
+# An attribute is plain: any method may change it.
 
 
 class Net(nn.Module):
