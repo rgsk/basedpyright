@@ -803,6 +803,10 @@
             "comment": ["{Locked='str'}", "{StrContains=i'bytes'}", "'bytes' is a keyword and should not be localized. It is only capitalized here because it is the first word in the sentence"]
         },
         "moduleAsType": "Module cannot be used as a type",
+        "moduleDictAccess": {
+            "message": "Could not access item in ModuleDict",
+            "comment": "{Locked='ModuleDict'}"
+        },
         "moduleNotCallable": "Module is not callable",
         "moduleUnknownMember": "\"{memberName}\" is not a known attribute of module \"{moduleName}\"",
         "namedExceptAfterCatchAll": {

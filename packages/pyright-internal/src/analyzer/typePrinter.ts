@@ -1153,11 +1153,13 @@ function printObjectTypeForClassInternal(
     // str keys, so a dict with another key type (d: dict[object, int] = {'a': 1})
     // prints its type arguments instead. A dict that started as {} has an unknown key
     // type: it prints its entries once it has some (d = {}; d['a'] = 1 is
-    // dict[{'a': int}]), and dict[Unknown, Unknown] until then.
+    // dict[{'a': int}]), and dict[Unknown, Unknown] until then. A ModuleDict (not
+    // generic) prints the same way: ModuleDict[{'body': Linear}].
     const keyTypeArg = type.priv.typeArgs?.[0];
     if (
         type.priv.knownEntries &&
         (ClassType.hasExactKnownEntries(type) ||
+            ClassType.isTorchModuleDict(type) ||
             (keyTypeArg && isClassInstance(keyTypeArg) && ClassType.isBuiltIn(keyTypeArg, 'str')) ||
             (keyTypeArg && isUnknown(keyTypeArg) && type.priv.knownEntries.size > 0))
     ) {

@@ -7,6 +7,8 @@
  */
 
 import assert from 'assert';
+import * as nodeFs from 'fs';
+import * as path from 'path';
 import { CancellationToken } from 'vscode-jsonrpc';
 import { MarkupKind } from 'vscode-languageserver-types';
 
@@ -26,6 +28,7 @@ import { DefinitionFilter, DefinitionProvider } from '../languageService/definit
 import { parseTestData } from './harness/fourslash/fourSlashParser';
 import { TestAccessHost } from './harness/testAccessHost';
 import * as host from './harness/testHost';
+import { resolveSampleFilePath } from './testUtils';
 import { createFromFileSystem, distlibFolder, libFolder } from './harness/vfs/factory';
 import * as vfs from './harness/vfs/filesystem';
 
@@ -602,8 +605,69 @@ test('dict key go-to-definition jumps to an earlier cell', () => {
     }
 });
 
-function createServiceWithChainedSourceFiles(basePath: Uri, code: string) {
+test('ModuleDict known entries carry over to later cells', async () => {
+    const code = `
+// @filename: test1.py
+//// from torch import nn
+//// core = nn.ModuleDict(dict(tau=nn.Linear(1, 2), act=nn.ReLU())).to("cpu")
+
+// @filename: test2.py
+//// reveal_type(core, expected_text="ModuleDict[{'tau': Linear, 'act': ReLU}]")
+//// reveal_type(core["act"], expected_text="ReLU")
+//// later = nn.ModuleDict({"x": nn.ReLU()})
+//// later["y"] = nn.ReLU()
+
+// @filename: test3.py
+//// reveal_type(core.eval()["tau"], expected_text="Linear")
+//// # A write in an earlier cell made it plain.
+//// reveal_type(later, expected_text="ModuleDict")
+//// core["tu"]
+    `;
+
+    // The torch stub of the based_moduledict sample.
+    const stubRoot = resolveSampleFilePath('based_moduledict');
+    const libFiles = new Map<string, string>();
+    for (const relativePath of [
+        'torch/__init__.pyi',
+        'torch/nn/__init__.pyi',
+        'torch/nn/modules/__init__.pyi',
+        'torch/nn/modules/module.pyi',
+        'torch/nn/modules/container.pyi',
+    ]) {
+        libFiles.set(relativePath, nodeFs.readFileSync(path.join(stubRoot, relativePath), 'utf8'));
+    }
+
+    const basePath = UriEx.file(normalizeSlashes('/'));
+    const { data, service } = createServiceWithChainedSourceFiles(basePath, code, libFiles);
+    analyze(service.test_program);
+
+    const errors: string[] = [];
+    for (const file of data.files) {
+        const parseResults = service.getParseResults(file.fileUri)!;
+        const diagnostics = await service.getDiagnosticsForRange(
+            file.fileUri,
+            convertOffsetsToRange(0, file.content.length, parseResults.tokenizerOutput.lines),
+            CancellationToken.None
+        );
+        diagnostics
+            .filter((d) => d.category === DiagnosticCategory.Error)
+            .forEach((d) => errors.push(`${file.fileName}: ${d.message}`));
+    }
+
+    // Only the missing key of the last cell.
+    assert.strictEqual(errors.length, 1, errors.join('\n'));
+    assert.match(errors[0], /test3\.py: Could not access item in ModuleDict/);
+});
+
+// libFiles: files to add to the file system (not opened as cells), keyed by their path
+// relative to basePath.
+function createServiceWithChainedSourceFiles(basePath: Uri, code: string, libFiles?: Map<string, string>) {
     const fs = createFromFileSystem(host.HOST, /*ignoreCase*/ false, { cwd: basePath.getFilePath() });
+    libFiles?.forEach((content, relativePath) => {
+        const fileUri = basePath.combinePaths(relativePath);
+        fs.mkdirpSync(fileUri.getDirectory().getFilePath());
+        fs.writeFileSync(fileUri, content);
+    });
     const service = new AnalyzerService('test service', new ServiceProvider(), {
         console: new NullConsole(),
         hostFactory: () => new TestAccessHost(UriEx.file(vfs.MODULE_PATH), [libFolder, distlibFolder]),

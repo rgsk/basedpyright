@@ -11,6 +11,13 @@
  * with an unknown literal key is reported as an error. A dict's known entries
  * are only what the checker has seen of it (code flow analysis updates them on
  * writes it can follow), so they never cause errors by themselves.
+ *
+ * PyTorch's nn.ModuleDict built from such a dict (ModuleDict({'body': ...}) or
+ * ModuleDict(dict(body=...))) has a dict's kind of known entries, with two
+ * differences: any write the checker sees removes them all (a plain ModuleDict
+ * again), and while they're there, reading a literal key they don't have is an
+ * error. Its self-returning methods (to(), cuda(), train(), ...) are declared to
+ * return Self, which keeps them.
  */
 
 import { DiagnosticAddendum } from '../common/diagnostic';
@@ -45,10 +52,24 @@ export function isFrozenDictClass(classType: ClassType): boolean {
     return ClassType.isBuiltIn(classType, 'frozendict') || classType.shared.fullName === 'frozendict.frozendict';
 }
 
-// Classes whose instances can have known entries: frozendict and the builtin dict
-// (not its subclasses, for the same reason).
+// Classes whose instances can have known entries: frozendict, the builtin dict and
+// PyTorch's nn.ModuleDict (not their subclasses, for the same reason).
 export function isKnownEntriesClass(classType: ClassType): boolean {
-    return isFrozenDictClass(classType) || ClassType.isBuiltIn(classType, 'dict');
+    return (
+        isFrozenDictClass(classType) || ClassType.isBuiltIn(classType, 'dict') || ClassType.isTorchModuleDict(classType)
+    );
+}
+
+// The value type of a frozendict or dict (its second type argument), or Module for a
+// ModuleDict, which isn't generic.
+function getValueType(classType: ClassType): Type | undefined {
+    if (!ClassType.isTorchModuleDict(classType)) {
+        return classType.priv.typeArgs?.[1];
+    }
+    const moduleClass = classType.shared.mro.find(
+        (mroClass) => isInstantiableClass(mroClass) && mroClass.shared.fullName === 'torch.nn.modules.module.Module'
+    );
+    return moduleClass ? convertToInstance(moduleClass) : undefined;
 }
 
 // Called with the result of a call to the frozendict or dict constructor. If every
@@ -64,8 +85,13 @@ export function applyFrozenDictEntries(
         return returnType;
     }
 
-    const valueType = returnType.priv.typeArgs?.[1];
+    const valueType = getValueType(returnType);
     if (!valueType) {
+        return returnType;
+    }
+
+    // A ModuleDict takes a single mapping of modules.
+    if (ClassType.isTorchModuleDict(returnType) && (argList.length !== 1 || argList[0].name)) {
         return returnType;
     }
 
@@ -393,7 +419,8 @@ export function getTypeOfIndexedFrozenDict(
         return undefined;
     }
 
-    if (!ClassType.hasExactKnownEntries(baseType)) {
+    const isModuleDict = ClassType.isTorchModuleDict(baseType);
+    if (!ClassType.hasExactKnownEntries(baseType) && !isModuleDict) {
         let isEveryKeyKnown = true;
         doForEachSubtype(indexType, (subtype) => {
             if (!entries.has((subtype as ClassType).priv.literalValue as string)) {
@@ -419,7 +446,7 @@ export function getTypeOfIndexedFrozenDict(
     if (!diag.isEmpty()) {
         evaluator.addDiagnostic(
             DiagnosticRule.reportGeneralTypeIssues,
-            LocMessage.frozenDictAccess() + diag.getString(),
+            (isModuleDict ? LocMessage.moduleDictAccess() : LocMessage.frozenDictAccess()) + diag.getString(),
             node
         );
     }
@@ -713,7 +740,7 @@ export function applyDictIndexWrite(
             return subtype;
         }
 
-        if (key === undefined) {
+        if (key === undefined || ClassType.isTorchModuleDict(subtype)) {
             return ClassType.cloneForKnownEntries(subtype, undefined);
         }
 
@@ -749,6 +776,11 @@ export function applyDictMutatorCall(evaluator: TypeEvaluator, type: Type, node:
     return mapSubtypes(type, (subtype) => {
         if (!isDictWithKnownEntries(subtype)) {
             return subtype;
+        }
+
+        // Any change to a ModuleDict's keys makes it a plain ModuleDict.
+        if (ClassType.isTorchModuleDict(subtype)) {
+            return ClassType.cloneForKnownEntries(subtype, undefined);
         }
 
         const entries = subtype.priv.knownEntries!;

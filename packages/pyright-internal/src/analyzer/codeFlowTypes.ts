@@ -167,9 +167,18 @@ export interface FlowPostContextManagerLabel extends FlowLabel {
     blockIfSwallowsExceptions: boolean;
 }
 
-// The methods of dict that add, replace or remove keys. Code flow analysis applies
-// a call to one of them to the known entries of the dict it's called on.
-export const dictMutatorMethodNames = new Set(['update', 'pop', 'popitem', 'clear', 'setdefault']);
+// The methods of dict (and of PyTorch's nn.ModuleDict: add_module, register_module)
+// that add, replace or remove keys. Code flow analysis applies a call to one of them
+// to the known entries of the dict it's called on.
+export const dictMutatorMethodNames = new Set([
+    'update',
+    'pop',
+    'popitem',
+    'clear',
+    'setdefault',
+    'add_module',
+    'register_module',
+]);
 
 export function isCodeFlowSupportedForReference(
     reference: ExpressionNode

@@ -351,3 +351,11 @@ test('frozendict from the frozendict package', () => {
     const analysisResults = typeAnalyzeSampleFiles(['based_frozendict_pypi/sample.py'], configOptions);
     validateResults(analysisResults, 1);
 });
+
+test('torch nn.ModuleDict with literal keys', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    configOptions.projectRoot = UriEx.file(resolveSampleFilePath('based_moduledict'));
+    const analysisResults = typeAnalyzeSampleFiles(['based_moduledict/sample.py'], configOptions);
+    validateResults(analysisResults, 2);
+});

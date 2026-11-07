@@ -1114,7 +1114,17 @@ export namespace ClassType {
     // Whether the known entries of an instance are exact (a frozendict, which can't
     // change) rather than what the checker has seen of a dict so far.
     export function hasExactKnownEntries(classType: ClassType): boolean {
-        return !!classType.priv.knownEntries && !ClassType.isBuiltIn(classType, 'dict');
+        return (
+            !!classType.priv.knownEntries && !ClassType.isBuiltIn(classType, 'dict') && !isTorchModuleDict(classType)
+        );
+    }
+
+    // PyTorch's nn.ModuleDict (not its subclasses). Built from a dict with literal keys,
+    // it has known entries like a dict's: what the checker has seen of it. Unlike a
+    // dict's, any write it sees removes them, and a read of a key they don't have is an
+    // error (see frozenDicts.ts).
+    export function isTorchModuleDict(classType: ClassType): boolean {
+        return classType.shared.fullName === 'torch.nn.modules.container.ModuleDict';
     }
 
     // Determines whether two instances have the same known entries.
@@ -4273,6 +4283,17 @@ function _addTypeIfUnique(unionType: UnionType, typeToAdd: UnionableType, elideR
                 // Two dicts with different known entries (as after an if statement that
                 // writes to the dict in one branch) are one dict that has the keys known
                 // in both, each with the value types from both.
+                // A ModuleDict's missing keys are errors, so it keeps its entries only
+                // when both have the same keys: one that's in a single branch may be there.
+                if (
+                    ClassType.isTorchModuleDict(type) &&
+                    (type.priv.knownEntries.size !== typeToAdd.priv.knownEntries.size ||
+                        [...type.priv.knownEntries.keys()].some((key) => !typeToAdd.priv.knownEntries!.has(key)))
+                ) {
+                    unionType.priv.subtypes[i] = ClassType.cloneForKnownEntries(type, undefined);
+                    return;
+                }
+
                 if (!ClassType.hasExactKnownEntries(type) && !ClassType.hasExactKnownEntries(typeToAdd)) {
                     const entriesToAdd = typeToAdd.priv.knownEntries;
                     const mergedEntries = new Map<string, Type>();

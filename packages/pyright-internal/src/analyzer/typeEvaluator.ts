@@ -5687,7 +5687,10 @@ export function createTypeEvaluator(
     ): Type | undefined {
         let hasDict = false;
         doForEachSubtype(effectiveType, (subtype) => {
-            if (isClassInstance(subtype) && ClassType.isBuiltIn(subtype, 'dict')) {
+            if (
+                isClassInstance(subtype) &&
+                (ClassType.isBuiltIn(subtype, 'dict') || ClassType.isTorchModuleDict(subtype))
+            ) {
                 hasDict = true;
             }
         });
