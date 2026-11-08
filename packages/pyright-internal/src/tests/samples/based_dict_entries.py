@@ -335,3 +335,31 @@ def expected_types() -> None:
     keyed: dict[object, int] = {"a": 1}
     reveal_type(keyed, expected_text="dict[object, int]")
     assert_type(keyed["a"], int)
+
+
+def comprehension() -> None:
+    # A dict comprehension over a fixed set of literal keys knows its keys. Every key
+    # has the value expression's type.
+    rows = {"train": [1, 2], "val": [3]}
+    lengths = {s: len(rows[s]) for s in rows}
+    reveal_type(lengths, expected_text="dict[{'train': int, 'val': int}]")
+    reveal_type({s: 0 for s in rows.keys()}, expected_text="dict[{'train': int, 'val': int}]")
+    reveal_type({k: v for k, v in rows.items()}, expected_text="dict[{'train': list[int], 'val': list[int]}]")
+    reveal_type({s: 0.5 for s in ["a", "b"]}, expected_text="dict[{'a': float, 'b': float}]")
+    reveal_type({s: 0.5 for s in ("a", "b")}, expected_text="dict[{'a': float, 'b': float}]")
+
+    # Nested: the value's own keys are kept.
+    z = {name: {s: w + len(rows[s]) for s in rows} for name, w in [("trained", 1), ("untrained", 2)]}
+    reveal_type(
+        z,
+        expected_text="dict[{'trained': dict[{'train': int, 'val': int}], 'untrained': dict[{'train': int, 'val': int}]}]",
+    )
+    assert_type(z["trained"]["val"], int)
+
+    # Keys not known before it runs: a plain dict.
+    names = ["a", "b"]
+    reveal_type({s: 0 for s in names}, expected_text="dict[str, int]")
+    reveal_type({s: 0 for s in rows if s != "val"}, expected_text="dict[str, int]")
+    reveal_type({s.upper(): 0 for s in rows}, expected_text="dict[str, int]")
+    reveal_type({v: 0 for k, v in [("a", "x")]}, expected_text="dict[str, int]")
+    reveal_type({k: 0 for k, v in rows.keys()}, expected_text="dict[str, int]")

@@ -29,6 +29,7 @@ import { LocAddendum, LocMessage } from '../localization/localize';
 import {
     ArgCategory,
     CallNode,
+    ComprehensionNode,
     DictionaryNode,
     ExpressionNode,
     IndexNode,
@@ -286,6 +287,10 @@ function addDictDisplayEntries(
     sources: Map<string, EntrySource>,
     allowInexact: boolean
 ): boolean {
+    if (node.d.items.length === 1 && node.d.items[0].nodeType === ParseNodeType.Comprehension) {
+        return addDictComprehensionEntries(evaluator, node.d.items[0], sources);
+    }
+
     for (const entry of node.d.items) {
         if (entry.nodeType === ParseNodeType.DictionaryExpandEntry) {
             if (!addKnownEntries(evaluator.getTypeOfExpression(entry.d.expr).type, sources, allowInexact)) {
@@ -314,6 +319,117 @@ function addDictDisplayEntries(
     }
 
     return true;
+}
+
+// Adds the entries of a dict comprehension whose keys are known before it runs:
+// one "for" clause and no "if", the key being the loop variable (or the first name
+// of a tuple target), looping over a fixed set of string literal keys:
+//   {s: f(s) for s in rows}             rows a dict or frozendict with known entries
+//   {s: f(s) for s in rows.keys()}
+//   {k: f(v) for k, v in rows.items()}
+//   {s: f(s) for s in ['train', 'val']}  a list or tuple display of string literals
+//   {k: f(v) for k, v in [('a', x), ('b', y)]}
+// Every key gets the type of the value expression (evaluated once, with the loop
+// variable of the iterable's item type), so only the keys are precise. Returns false
+// otherwise.
+function addDictComprehensionEntries(
+    evaluator: TypeEvaluator,
+    node: ComprehensionNode,
+    sources: Map<string, EntrySource>
+): boolean {
+    if (node.d.forIfNodes.length !== 1 || node.d.expr.nodeType !== ParseNodeType.DictionaryKeyEntry) {
+        return false;
+    }
+    const forNode = node.d.forIfNodes[0];
+    const entry = node.d.expr;
+    const keyExpr = entry.d.keyExpr;
+    if (
+        forNode.nodeType !== ParseNodeType.ComprehensionFor ||
+        forNode.d.isAsync ||
+        keyExpr.nodeType !== ParseNodeType.Name
+    ) {
+        return false;
+    }
+
+    const keys = getComprehensionKeys(evaluator, forNode.d.targetExpr, forNode.d.iterableExpr, keyExpr.d.value);
+    if (!keys) {
+        return false;
+    }
+
+    keys.forEach((key) => setSource(sources, key, { expr: entry.d.valueExpr }));
+    return true;
+}
+
+// The keys a comprehension's key variable (keyName) takes, if they're a fixed set of
+// string literals (see addDictComprehensionEntries).
+function getComprehensionKeys(
+    evaluator: TypeEvaluator,
+    targetExpr: ExpressionNode,
+    iterableExpr: ExpressionNode,
+    keyName: string
+): string[] | undefined {
+    // for k in ... or for k, v in ...
+    let isPairTarget: boolean;
+    if (targetExpr.nodeType === ParseNodeType.Name && targetExpr.d.value === keyName) {
+        isPairTarget = false;
+    } else if (
+        targetExpr.nodeType === ParseNodeType.Tuple &&
+        targetExpr.d.items.length === 2 &&
+        targetExpr.d.items[0].nodeType === ParseNodeType.Name &&
+        targetExpr.d.items[0].d.value === keyName &&
+        !(targetExpr.d.items[1].nodeType === ParseNodeType.Name && targetExpr.d.items[1].d.value === keyName)
+    ) {
+        isPairTarget = true;
+    } else {
+        return undefined;
+    }
+
+    // A list or tuple display: ['a', 'b'] or [('a', x), ('b', y)].
+    if (iterableExpr.nodeType === ParseNodeType.List || iterableExpr.nodeType === ParseNodeType.Tuple) {
+        const keys: string[] = [];
+        for (const item of iterableExpr.d.items) {
+            let keyItem: ExpressionNode = item;
+            if (isPairTarget) {
+                if (item.nodeType !== ParseNodeType.Tuple || item.d.items.length !== 2) {
+                    return undefined;
+                }
+                keyItem = item.d.items[0];
+            }
+            const key = getStringLiteral(evaluator.getTypeOfExpression(keyItem).type);
+            if (key === undefined) {
+                return undefined;
+            }
+            keys.push(key);
+        }
+        return keys;
+    }
+
+    // rows, rows.keys() or rows.items().
+    let mappingExpr: ExpressionNode = iterableExpr;
+    let method: string | undefined;
+    if (
+        iterableExpr.nodeType === ParseNodeType.Call &&
+        iterableExpr.d.args.length === 0 &&
+        iterableExpr.d.leftExpr.nodeType === ParseNodeType.MemberAccess
+    ) {
+        mappingExpr = iterableExpr.d.leftExpr.d.leftExpr;
+        method = iterableExpr.d.leftExpr.d.member.d.value;
+    }
+    if (isPairTarget ? method !== 'items' : method !== undefined && method !== 'keys') {
+        return undefined;
+    }
+
+    const mappingType = evaluator.getTypeOfExpression(mappingExpr).type;
+    if (!isClassInstance(mappingType) || !isKnownEntriesClass(mappingType) || !mappingType.priv.knownEntries) {
+        return undefined;
+    }
+    return [...mappingType.priv.knownEntries.keys()];
+}
+
+function getStringLiteral(type: Type): string | undefined {
+    return isClassInstance(type) && ClassType.isBuiltIn(type, 'str') && typeof type.priv.literalValue === 'string'
+        ? type.priv.literalValue
+        : undefined;
 }
 
 // Evaluates the entries' value types. Returns undefined if one isn't known yet
@@ -896,7 +1012,9 @@ function applyDictUpdate(evaluator: TypeEvaluator, subtype: ClassType, node: Cal
     }
 
     const newValueTypes = [...argSources.values()].map((source) =>
-        'type' in source ? source.type : stripLiteralsInTuples(evaluator, evaluator.getTypeOfExpression(source.expr).type)
+        'type' in source
+            ? source.type
+            : stripLiteralsInTuples(evaluator, evaluator.getTypeOfExpression(source.expr).type)
     );
     const widenedValueType = combineTypes([valueType, ...newValueTypes]);
     const widenedEntries = resolveEntries(evaluator, sources, widenedValueType, /* allowInexact */ true);

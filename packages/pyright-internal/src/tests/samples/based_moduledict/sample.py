@@ -160,8 +160,15 @@ def unchanged(mapping: dict[str, nn.Module], name: str):
     reveal_type(nn.ModuleDict({}), expected_text="ModuleDict")
     reveal_type(nn.ModuleDict(mapping), expected_text="ModuleDict")
     reveal_type(nn.ModuleDict({name: nn.ReLU()}), expected_text="ModuleDict")
-    reveal_type(nn.ModuleDict({k: nn.ReLU() for k in ["a", "b"]}), expected_text="ModuleDict")
+    reveal_type(nn.ModuleDict({k: nn.ReLU() for k in mapping}), expected_text="ModuleDict")
     assert_type(nn.ModuleDict(mapping)["anything"], nn.Module)
+
+
+
+# A dict comprehension over a fixed set of literal keys gives its keys too.
+def from_comprehension():
+    heads = nn.ModuleDict({k: nn.ReLU() for k in ["a", "b"]})
+    reveal_type(heads, expected_text="ModuleDict[{'a': ReLU, 'b': ReLU}]")
 
 
 class MyDict(nn.ModuleDict): ...
