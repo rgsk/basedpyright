@@ -857,8 +857,10 @@ export interface ClassDetailsPriv {
     //   the lifetime of the object (see hasExactKnownEntries).
     // - dict: the entries are what the checker has seen so far: code flow
     //   analysis updates them on writes it can follow, and they're dropped
-    //   wherever it can't follow the dict. They never cause errors by
-    //   themselves; they only make reads more precise.
+    //   wherever it can't follow the dict. The dicts in a container (a type
+    //   argument) keep them, until a write through the container that the
+    //   checker can't follow to one dict (see removeDictKnownEntriesInContents).
+    //   They never cause errors by themselves; they only make reads more precise.
     knownEntries?: Map<string, Type> | undefined;
 
     // Where each known entry's key was added, for go-to-definition on a key: the key
@@ -982,16 +984,6 @@ export namespace ClassType {
     ): ClassType {
         const newClassType = TypeBase.cloneType(classType);
 
-        // A dict used as a type argument (as in list[dict[str, int]]) can be changed
-        // through the object that holds it, which code flow analysis doesn't follow,
-        // so its known entries don't apply there.
-        if (typeArgs?.some(hasDictKnownEntries)) {
-            typeArgs = typeArgs.map(removeDictKnownEntriesFromTypeArg);
-        }
-        if (tupleTypeArgs?.some((arg) => hasDictKnownEntries(arg.type))) {
-            tupleTypeArgs = tupleTypeArgs.map((arg) => ({ ...arg, type: removeDictKnownEntriesFromTypeArg(arg.type) }));
-        }
-
         newClassType.priv.typeArgs = typeArgs?.length === 0 ? undefined : typeArgs;
 
         // If the user passed undefined for this argument, infer it
@@ -1013,38 +1005,6 @@ export namespace ClassType {
         }
 
         return newClassType;
-    }
-
-    function isDictWithKnownEntries(type: Type): type is ClassType {
-        return (
-            type.category === TypeCategory.Class &&
-            !!type.priv.knownEntries &&
-            TypeBase.isInstance(type) &&
-            !hasExactKnownEntries(type)
-        );
-    }
-
-    function hasDictKnownEntries(type: Type): boolean {
-        return (
-            isDictWithKnownEntries(type) ||
-            (type.category === TypeCategory.Union && type.priv.subtypes.some(isDictWithKnownEntries))
-        );
-    }
-
-    function removeDictKnownEntriesFromTypeArg(type: Type): Type {
-        if (isDictWithKnownEntries(type)) {
-            return cloneForKnownEntries(type, undefined);
-        }
-
-        if (type.category === TypeCategory.Union && type.priv.subtypes.some(isDictWithKnownEntries)) {
-            return combineTypes(
-                type.priv.subtypes.map((subtype) =>
-                    isDictWithKnownEntries(subtype) ? cloneForKnownEntries(subtype, undefined) : subtype
-                )
-            );
-        }
-
-        return type;
     }
 
     export function cloneIncludeSubclasses(classType: ClassType, includeSubclasses = true) {
@@ -4324,6 +4284,30 @@ function _addTypeIfUnique(unionType: UnionType, typeToAdd: UnionableType, elideR
                     );
                     return;
                 }
+            }
+
+            // Two containers that differ only in the known entries of the dicts they hold
+            // (list[dict[{'a': int}]] and list[dict[{'a': int, 'b': int}]]) are one
+            // container, with each type argument combined as above.
+            if (
+                !type.priv.knownEntries &&
+                !typeToAdd.priv.knownEntries &&
+                (type.priv.typeArgs || type.priv.tupleTypeArgs) &&
+                isTypeSame(type, typeToAdd, { ignoreKnownEntries: true, honorTypeForm: true })
+            ) {
+                const newType = TypeBase.cloneType(type);
+                const typeArgsToAdd = typeToAdd.priv.typeArgs;
+                const tupleTypeArgsToAdd = typeToAdd.priv.tupleTypeArgs;
+                newType.priv.typeArgs = type.priv.typeArgs?.map((typeArg, index) =>
+                    typeArgsToAdd?.[index] ? combineTypes([typeArg, typeArgsToAdd[index]]) : typeArg
+                );
+                newType.priv.tupleTypeArgs = type.priv.tupleTypeArgs?.map((typeArg, index) =>
+                    tupleTypeArgsToAdd?.[index]
+                        ? { ...typeArg, type: combineTypes([typeArg.type, tupleTypeArgsToAdd[index].type]) }
+                        : typeArg
+                );
+                unionType.priv.subtypes[i] = newType;
+                return;
             }
         }
 

@@ -180,6 +180,11 @@ export const dictMutatorMethodNames = new Set([
     'register_module',
 ]);
 
+// The methods of containers that put new objects in them. A dict put in a
+// container may have other keys than the dicts already there, so code flow
+// analysis applies a call to one of them to the dicts the container holds.
+export const containerAddMethodNames = new Set(['append', 'insert', 'extend', 'add', 'appendleft', 'extendleft']);
+
 export function isCodeFlowSupportedForReference(
     reference: ExpressionNode
 ): reference is CodeFlowReferenceExpressionNode {

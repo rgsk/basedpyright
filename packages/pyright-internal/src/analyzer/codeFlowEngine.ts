@@ -14,10 +14,11 @@
 import { ConsoleInterface } from '../common/console';
 import { assert, fail } from '../common/debug';
 import { convertOffsetToPosition } from '../common/positionUtils';
-import { ArgCategory, ExpressionNode, ParseNode, ParseNodeType, StringListNode } from '../parser/parseNodes';
+import { ArgCategory, ExpressionNode, IndexNode, ParseNode, ParseNodeType, StringListNode } from '../parser/parseNodes';
 import { AnalyzerNodeInfoAccessor } from './analyzerNodeInfo';
 import {
     CodeFlowReferenceExpressionNode,
+    containerAddMethodNames,
     createKeyForReference,
     createKeysForReferenceSubexpressions,
     dictMutatorMethodNames,
@@ -44,10 +45,16 @@ import {
     getLiteralKeyOfIndex,
     hasDictWithKnownEntries,
     isDictKeyChangedByMutatorCall,
+    removeDictKnownEntriesInContents,
 } from './frozenDicts';
 import { getBoundCallMethod, getBoundNewMethod } from './constructors';
 import { DeclarationType } from './declaration';
-import { isMatchingExpression, isPartialMatchingExpression, printExpression } from './parseTreeUtils';
+import {
+    isIndexedFromReference,
+    isMatchingExpression,
+    isPartialMatchingExpression,
+    printExpression,
+} from './parseTreeUtils';
 import { getPatternSubtypeNarrowingCallback } from './patternMatching';
 import { SpeculativeTypeTracker } from './typeCacheUtils';
 import { narrowForKeyAssignment } from './typedDicts';
@@ -503,6 +510,62 @@ export function getCodeFlowEngine(
                 );
             }
 
+            // Applies the write (or deletion) of an assignment flow node whose target is
+            // x[...] to x: to its known entries if it's a dict, and to the dicts it holds,
+            // since a dict put in x may have other keys than the dicts there.
+            function applyIndexWriteToContainer(type: Type, flowNode: FlowAssignment): Type {
+                type = applyDictIndexWriteForFlowNode(type, flowNode);
+                if (flowNode.flags & FlowFlags.Unbind) {
+                    return type;
+                }
+                return removeDictKnownEntriesInContents(type, /* includeEntries */ false);
+            }
+
+            // Applies a change to an object the reference holds (the expression, as
+            // x[i] or x['a'][i] for the reference x) to the reference's type. Through
+            // dicts with known entries indexed by a known key, the change is applied
+            // to that key's entry. Elsewhere, the checker can't tell which object
+            // changed, so the dicts there lose their known entries.
+            function applyWriteThroughElement(
+                type: Type,
+                reference: CodeFlowReferenceExpressionNode,
+                expression: ExpressionNode,
+                applyChange: (type: Type) => Type
+            ): Type {
+                const indexNodes: IndexNode[] = [];
+                let curNode = expression;
+                while (curNode.nodeType === ParseNodeType.Index) {
+                    indexNodes.unshift(curNode);
+                    if (isMatchingExpression(reference, curNode.d.leftExpr)) {
+                        break;
+                    }
+                    curNode = curNode.d.leftExpr;
+                }
+
+                const applyToIndex = (type: Type, index: number): Type => {
+                    if (index === indexNodes.length) {
+                        return applyChange(type);
+                    }
+
+                    const key = getLiteralKeyOfIndex(evaluator, indexNodes[index]);
+                    return mapSubtypes(type, (subtype) => {
+                        const entryType =
+                            key !== undefined && isClassInstance(subtype) && !ClassType.hasExactKnownEntries(subtype)
+                                ? subtype.priv.knownEntries?.get(key)
+                                : undefined;
+                        if (!entryType || !isClass(subtype)) {
+                            return removeDictKnownEntriesInContents(subtype, /* includeEntries */ true);
+                        }
+
+                        const entries = new Map(subtype.priv.knownEntries);
+                        entries.set(key!, applyToIndex(entryType, index + 1));
+                        return ClassType.cloneForKnownEntries(subtype, entries, subtype.priv.knownEntryOrigins);
+                    });
+                };
+
+                return applyToIndex(type, 0);
+            }
+
             function preventRecursion<T>(flowNode: FlowNode, callback: () => T): T {
                 flowNodeTypeCache.pendingNodes.add(flowNode.id);
 
@@ -577,8 +640,44 @@ export function getCodeFlowEngine(
                             return setCacheEntry(curFlowNode, /* type */ undefined, /* isIncomplete */ false);
                         }
 
-                        // Is this a call like x.update(...) that changes the keys of a dict?
+                        // Is this a call like x[i].update(...) that changes the keys of a dict
+                        // the reference holds, or x.append(...) that puts a dict in it?
                         const callNode = callFlowNode.node;
+                        if (reference && callNode.d.leftExpr.nodeType === ParseNodeType.MemberAccess) {
+                            const methodName = callNode.d.leftExpr.d.member.d.value;
+                            const receiverNode = callNode.d.leftExpr.d.leftExpr;
+                            const isWriteThroughElement =
+                                dictMutatorMethodNames.has(methodName) &&
+                                isIndexedFromReference(reference, receiverNode);
+                            const isContainerAdd =
+                                containerAddMethodNames.has(methodName) &&
+                                (isMatchingExpression(reference, receiverNode) ||
+                                    isIndexedFromReference(reference, receiverNode));
+                            if (isWriteThroughElement || isContainerAdd) {
+                                const mutatedResult = preventRecursion(curFlowNode, () => {
+                                    const flowTypeResult = getTypeFromFlowNode(callFlowNode.antecedent);
+                                    if (flowTypeResult.type) {
+                                        const applyCall = (type: Type) =>
+                                            isWriteThroughElement
+                                                ? applyDictMutatorCall(evaluator, type, callNode)
+                                                : removeDictKnownEntriesInContents(type, /* includeEntries */ false);
+                                        flowTypeResult.type = isMatchingExpression(reference, receiverNode)
+                                            ? applyCall(flowTypeResult.type)
+                                            : applyWriteThroughElement(
+                                                  flowTypeResult.type,
+                                                  reference,
+                                                  receiverNode,
+                                                  applyCall
+                                              );
+                                    }
+                                    return flowTypeResult;
+                                });
+
+                                return setCacheEntry(curFlowNode, mutatedResult.type, !!mutatedResult.isIncomplete);
+                            }
+                        }
+
+                        // Is this a call like x.update(...) that changes the keys of a dict?
                         if (
                             reference &&
                             callNode.d.leftExpr.nodeType === ParseNodeType.MemberAccess &&
@@ -711,12 +810,34 @@ export function getCodeFlowEngine(
                                             });
                                         }
 
-                                        flowTypeResult.type = applyDictIndexWriteForFlowNode(
+                                        flowTypeResult.type = applyIndexWriteToContainer(
                                             flowTypeResult.type,
                                             assignmentFlowNode
                                         );
                                     }
 
+                                    return flowTypeResult;
+                                });
+
+                                return setCacheEntry(curFlowNode, narrowedResult?.type, !!narrowedResult?.isIncomplete);
+                            }
+
+                            // Is this a write to (or deletion of) x[i][...], which changes a
+                            // dict the reference holds?
+                            if (
+                                targetNode.nodeType === ParseNodeType.Index &&
+                                isIndexedFromReference(reference, targetNode.d.leftExpr)
+                            ) {
+                                const narrowedResult = preventRecursion(assignmentFlowNode, () => {
+                                    const flowTypeResult = getTypeFromFlowNode(assignmentFlowNode.antecedent);
+                                    if (flowTypeResult.type) {
+                                        flowTypeResult.type = applyWriteThroughElement(
+                                            flowTypeResult.type,
+                                            reference,
+                                            targetNode.d.leftExpr,
+                                            (type) => applyIndexWriteToContainer(type, assignmentFlowNode)
+                                        );
+                                    }
                                     return flowTypeResult;
                                 });
 

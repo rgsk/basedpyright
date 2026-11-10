@@ -277,11 +277,92 @@ def read_other_type() -> None:
 other_type = {"b": "x"}
 
 
-def containers() -> None:
+def summarize(losses: list[float]):
+    best = min(losses)
+    return {"best": best, "best_epoch": losses.index(best), "improved": losses[-1] < losses[0]}
+
+
+def take_rows(rows: list[dict[str, float | int | bool]]) -> None: ...
+
+
+def first[T](items: list[T]) -> T: ...
+
+
+# The dicts in a container keep their known entries.
+def containers(runs: dict[str, list[float]]) -> None:
     user = {"name": "rahul", "age": 27}
-    reveal_type([user], expected_text="list[dict[str, str | int]]")
-    reveal_type((user, 1), expected_text="tuple[dict[str, str | int], Literal[1]]")
+    reveal_type([user], expected_text="list[dict[{'name': str, 'age': int}]]")
+    reveal_type((user, 1), expected_text="tuple[dict[{'name': str, 'age': int}], Literal[1]]")
+    assert_type((user, 1)[0]["age"], int)
+    reveal_type({"u": user}, expected_text="dict[{'u': dict[{'name': str, 'age': int}]}]")
+
+    rows = [summarize(losses) for losses in [[0.9, 0.4], [0.8, 0.5]]]
+    reveal_type(rows, expected_text="list[dict[{'best': float, 'best_epoch': int, 'improved': bool}]]")
+    assert_type(rows[0]["best_epoch"], int)
+    assert_type(first(rows)["improved"], bool)
+    by_run = {name: summarize(losses) for name, losses in runs.items()}
+    reveal_type(by_run, expected_text="dict[str, dict[{'best': float, 'best_epoch': int, 'improved': bool}]]")
+    assert_type(by_run["x"]["best"], float)
+
+    # Dicts that differ only in their known entries are one dict with the keys
+    # known in all of them, as after an if statement.
+    reveal_type([{"a": 1}, {"a": 2, "b": 3}], expected_text="list[dict[{'a': int}]]")
     reveal_type([{"a": "b"}, {"c": "d"}], expected_text="list[dict[str, str]]")
+
+    # Known entries never cause errors: the container is still a container of
+    # the dict's plain type, invariance included.
+    take_rows(rows)
+    declared: list[dict[str, float | int | bool]] = rows
+    rows.append({"best": 1.0})
+    rows.extend([{"other": 2}])
+
+
+# A write through a container the checker can't follow to one dict changes the
+# dicts it holds, so they become plain dicts. One that it can follow (literal
+# keys of dicts with known entries) changes that dict's entries.
+def container_writes(i: int, name: str) -> None:
+    rows = [{"a": 1.0, "b": "x"}]
+    rows[i]["a"] = "y"
+    reveal_type(rows, expected_text="list[dict[str, float | str]]")
+
+    deleted = [{"a": 1.0, "b": "x"}]
+    del deleted[0]["a"]
+    reveal_type(deleted, expected_text="list[dict[str, float | str]]")
+
+    updated = ({"a": 1.0, "b": "x"}, 1)
+    updated[0].update(a="y")
+    reveal_type(updated, expected_text="tuple[dict[str, float | str], Literal[1]]")
+
+    # Putting a new dict in the container: it may have other keys.
+    appended = [{"a": 1.0, "b": "x"}]
+    appended.append({"a": "y", "b": "x"})
+    reveal_type(appended, expected_text="list[dict[str, float | str]]")
+    replaced = [{"a": 1.0, "b": "x"}]
+    replaced[i] = {"a": "y", "b": "x"}
+    reveal_type(replaced, expected_text="list[dict[str, float | str]]")
+
+    nested = [[{"a": 1.0, "b": "x"}]]
+    nested[0][i]["a"] = "y"
+    reveal_type(nested, expected_text="list[list[dict[str, float | str]]]")
+
+    by_name = {"x": {"a": 1.0, "b": "x"}, "y": {"a": 2.0, "b": "z"}}
+    by_name["x"]["a"] = "y"
+    reveal_type(by_name, expected_text="dict[{'x': dict[{'a': str, 'b': str}], 'y': dict[{'a': float, 'b': str}]}]")
+    by_name["y"].pop("a")
+    reveal_type(by_name, expected_text="dict[{'x': dict[{'a': str, 'b': str}], 'y': dict[{'b': str}]}]")
+    by_name[name]["b"] = "w"
+    reveal_type(by_name, expected_text="dict[{'x': dict[str, float | str], 'y': dict[str, float | str]}]")
+
+    looped = [{"a": 1.0, "b": "x"}]
+    for j in range(3):
+        looped[j]["a"] = "y"
+    reveal_type(looped, expected_text="list[dict[str, float | str]]")
+
+    # Reads don't change anything.
+    read = [{"a": 1.0, "b": "x"}]
+    read[0]["a"]
+    read.index(read[0])
+    reveal_type(read, expected_text="list[dict[{'a': float, 'b': str}]]")
 
 
 def membership() -> None:

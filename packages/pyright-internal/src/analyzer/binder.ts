@@ -99,6 +99,7 @@ import {
     FlowPreFinallyGate,
     FlowVariableAnnotation,
     FlowWildcardImport,
+    containerAddMethodNames,
     createKeyForReference,
     dictMutatorMethodNames,
     getUniqueFlowNodeId,
@@ -894,6 +895,21 @@ export class Binder extends ParseTreeWalker {
             isCodeFlowSupportedForReference(node.d.leftExpr.d.leftExpr)
         ) {
             this._currentScopeCodeFlowExpressions!.add(createKeyForReference(node.d.leftExpr.d.leftExpr));
+        }
+        // So may a call like x[i].update(...) to the keys of a dict x holds, and one
+        // like x.append(...) that puts a dict in x.
+        if (
+            node.d.leftExpr.nodeType === ParseNodeType.MemberAccess &&
+            dictMutatorMethodNames.has(node.d.leftExpr.d.member.d.value) &&
+            node.d.leftExpr.d.leftExpr.nodeType === ParseNodeType.Index
+        ) {
+            this._addContainerReferenceKeys(node.d.leftExpr.d.leftExpr.d.leftExpr);
+        }
+        if (
+            node.d.leftExpr.nodeType === ParseNodeType.MemberAccess &&
+            containerAddMethodNames.has(node.d.leftExpr.d.member.d.value)
+        ) {
+            this._addContainerReferenceKeys(node.d.leftExpr.d.leftExpr);
         }
 
         // Create a call flow node. We'll skip this if the call is part of
@@ -3617,11 +3633,20 @@ export class Binder extends ParseTreeWalker {
                     this._currentScopeCodeFlowExpressions!.add(createKeyForReference(target.d.leftExpr));
                 }
 
-                if (isIndexWrite && !unbound) {
+                // A write to x[i][...] (at any depth) changes a dict x holds, so the code
+                // flow analysis of x must see it, even when neither x[i][...] nor x[i] is
+                // a supported reference.
+                const isContainerWrite =
+                    target.d.leftExpr.nodeType === ParseNodeType.Index &&
+                    this._addContainerReferenceKeys(target.d.leftExpr.d.leftExpr) &&
+                    !isCodeFlowSupportedForReference(target) &&
+                    !isIndexWrite;
+
+                if ((isIndexWrite || isContainerWrite) && !unbound) {
                     this._createFlowIndexWrite(target, unbound);
                 }
                 this._createFlowAssignment(target, unbound);
-                if (isIndexWrite && unbound) {
+                if ((isIndexWrite || isContainerWrite) && unbound) {
                     this._createFlowIndexWrite(target, unbound);
                 }
 
@@ -3736,6 +3761,23 @@ export class Binder extends ParseTreeWalker {
         // Otherwise, the node will be evaluated as unbound at this point in the flow.
         if (!unbound || this._nodeInfo.getFlowNode(node) === undefined) {
             this._nodeInfo.setFlowNode(node, unbound ? prevFlowNode : this._currentFlowNode!);
+        }
+    }
+
+    // Adds the reference keys of the expression and the expressions it's indexed from
+    // (x[i] and x for x[i][j]) that code flow analysis supports. Whether there were any.
+    private _addContainerReferenceKeys(expression: ExpressionNode): boolean {
+        let isAdded = false;
+        let curNode: ExpressionNode = expression;
+        while (true) {
+            if (isCodeFlowSupportedForReference(curNode)) {
+                this._currentScopeCodeFlowExpressions!.add(createKeyForReference(curNode));
+                isAdded = true;
+            }
+            if (curNode.nodeType !== ParseNodeType.Index) {
+                return isAdded;
+            }
+            curNode = curNode.d.leftExpr;
         }
     }
 

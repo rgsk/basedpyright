@@ -15990,9 +15990,7 @@ export function createTypeEvaluator(
             )
         );
         const valueTypes = valueTypeResults.map((t) =>
-            removeDictKnownEntries(
-                stripTypeForm(convertSpecialFormToRuntimeValue(stripLiteralValue(t.type), flags, !hasExpectedType))
-            )
+            stripTypeForm(convertSpecialFormToRuntimeValue(stripLiteralValue(t.type), flags, !hasExpectedType))
         );
 
         if (keyTypes.length > 0) {
@@ -16014,7 +16012,7 @@ export function createTypeEvaluator(
             if (nodeInfo.getFileInfo(node).diagnosticRuleSet.strictDictionaryInference || hasExpectedType) {
                 valueType = combineTypes(valueTypes);
             } else {
-                valueType = areTypesSame(valueTypes, { ignorePseudoGeneric: true }) ? valueTypes[0] : fallbackType;
+                valueType = getHomogeneousEntryType(valueTypes) ?? fallbackType;
             }
         } else {
             valueType = fallbackType;
@@ -16533,6 +16531,20 @@ export function createTypeEvaluator(
         return specializedListOrSet.priv.typeArgs[0];
     }
 
+    // The entry type of a list, set or dict display whose entries all have the same
+    // type, if they do. Dicts that differ only in their known entries (or containers
+    // of such dicts) count as one type, with the keys known in all of them (see
+    // combineTypes).
+    function getHomogeneousEntryType(entryTypes: Type[]): Type | undefined {
+        if (areTypesSame(entryTypes, { ignorePseudoGeneric: true })) {
+            return entryTypes[0];
+        }
+        if (areTypesSame(entryTypes, { ignorePseudoGeneric: true, ignoreKnownEntries: true })) {
+            return combineTypes(entryTypes);
+        }
+        return undefined;
+    }
+
     // Attempts to infer the type of a list or set statement with no "expected type".
     function getTypeOfListOrSetInferred(
         node: ListNode | SetNode,
@@ -16576,9 +16588,7 @@ export function createTypeEvaluator(
             }
         });
 
-        // A dict's known entries don't apply to the dicts in a container (see
-        // ClassType.specialize), so they shouldn't make its entries' types differ.
-        entryTypes = entryTypes.map((t) => removeDictKnownEntries(stripLiteralValue(t)));
+        entryTypes = entryTypes.map((t) => stripLiteralValue(t));
 
         let inferredEntryType: Type = hasExpectedType ? AnyType.create() : UnknownType.create();
         if (entryTypes.length > 0) {
@@ -16593,9 +16603,7 @@ export function createTypeEvaluator(
                 inferredEntryType = combineTypes(entryTypes, { maxSubtypeCount: maxSubtypesForInferredType });
             } else {
                 // Is the list or set homogeneous? If so, use stricter rules. Otherwise relax the rules.
-                inferredEntryType = areTypesSame(entryTypes, { ignorePseudoGeneric: true })
-                    ? entryTypes[0]
-                    : inferredEntryType;
+                inferredEntryType = getHomogeneousEntryType(entryTypes) ?? inferredEntryType;
             }
         } else {
             isEmptyContainer = true;

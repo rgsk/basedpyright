@@ -43,9 +43,11 @@ import {
     ClassType,
     combineTypes,
     isAnyOrUnknown,
+    isClass,
     isClassInstance,
     isInstantiableClass,
     Type,
+    TypeBase,
     UnknownType,
 } from './types';
 import { convertToInstance, doForEachSubtype, isTupleClass, mapSubtypes, specializeTupleClass } from './typeUtils';
@@ -792,6 +794,66 @@ export function removeDictKnownEntries(type: Type): Type {
     return mapSubtypes(type, (subtype) =>
         isDictWithKnownEntries(subtype) ? ClassType.cloneForKnownEntries(subtype, undefined) : subtype
     );
+}
+
+// Code flow analysis: the type of x after a write through one of the objects it
+// holds, as in x[i]['key'] = value, del x[i]['key'] or x[i].update(...). The
+// checker can't tell which object changed, so the dicts x holds (its type
+// arguments, and with includeEntries the values of its own known entries, at any
+// depth) lose their known entries. x's own known entries stay: its keys didn't
+// change. Without includeEntries, it's the type of x after a new object is put in
+// it (x[i] = value, x.append(value)): a dict there may have other keys.
+export function removeDictKnownEntriesInContents(type: Type, includeEntries: boolean): Type {
+    return mapSubtypes(type, (subtype) =>
+        isClass(subtype) ? removeContentsEntries(subtype, 0, includeEntries) : subtype
+    );
+}
+
+const maxContentsDepth = 16;
+
+function removeNestedDictKnownEntries(type: Type, depth: number): Type {
+    if (depth > maxContentsDepth) {
+        return type;
+    }
+    return mapSubtypes(type, (subtype) => {
+        if (!isClass(subtype)) {
+            return subtype;
+        }
+        const withoutEntries = isDictWithKnownEntries(subtype)
+            ? ClassType.cloneForKnownEntries(subtype, undefined)
+            : subtype;
+        return removeContentsEntries(withoutEntries, depth + 1, /* includeEntries */ true);
+    });
+}
+
+function removeContentsEntries(classType: ClassType, depth: number, includeEntries: boolean): ClassType {
+    const { typeArgs, tupleTypeArgs } = classType.priv;
+    const knownEntries = includeEntries ? classType.priv.knownEntries : undefined;
+    const newTypeArgs = typeArgs?.map((t) => removeNestedDictKnownEntries(t, depth));
+    const newTupleTypeArgs = tupleTypeArgs?.map((arg) => ({
+        ...arg,
+        type: removeNestedDictKnownEntries(arg.type, depth),
+    }));
+    let newEntries: Map<string, Type> | undefined;
+    if (knownEntries) {
+        newEntries = new Map();
+        knownEntries.forEach((entryType, key) => newEntries!.set(key, removeNestedDictKnownEntries(entryType, depth)));
+    }
+
+    const isChanged =
+        newTypeArgs?.some((t, i) => t !== typeArgs![i]) ||
+        newTupleTypeArgs?.some((arg, i) => arg.type !== tupleTypeArgs![i].type) ||
+        (newEntries && [...newEntries].some(([key, t]) => t !== knownEntries!.get(key)));
+    if (!isChanged) {
+        return classType;
+    }
+
+    const newClassType = newEntries
+        ? ClassType.cloneForKnownEntries(classType, newEntries, classType.priv.knownEntryOrigins)
+        : TypeBase.cloneType(classType);
+    newClassType.priv.typeArgs = newTypeArgs;
+    newClassType.priv.tupleTypeArgs = newTupleTypeArgs;
+    return newClassType;
 }
 
 // Whether the type is (or is a union that includes) a dict with known entries.

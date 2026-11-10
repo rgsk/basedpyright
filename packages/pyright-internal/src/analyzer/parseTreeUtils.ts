@@ -1419,6 +1419,29 @@ export function isPartialMatchingExpression(reference: ExpressionNode, expressio
     return false;
 }
 
+// Whether the expression is an object the reference holds, at any depth, reached by
+// indexing it (x[i], x[i][j], x['a'][i] for the reference x): a write to (or
+// through) the expression changes an object inside the reference.
+export function isIndexedFromReference(reference: ExpressionNode, expression: ExpressionNode): boolean {
+    let curNode = expression;
+    while (curNode.nodeType === ParseNodeType.Index) {
+        if (isMatchingExpression(reference, curNode.d.leftExpr)) {
+            return true;
+        }
+        curNode = curNode.d.leftExpr;
+    }
+    return false;
+}
+
+// The innermost expression of an index chain (x for x[i][j]).
+export function getIndexChainBase(expression: ExpressionNode): ExpressionNode {
+    let curNode = expression;
+    while (curNode.nodeType === ParseNodeType.Index) {
+        curNode = curNode.d.leftExpr;
+    }
+    return curNode;
+}
+
 export function isWithinDefaultParamInitializer(node: ParseNode) {
     let curNode: ParseNode | undefined = node;
     let prevNode: ParseNode | undefined;
