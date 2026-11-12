@@ -344,6 +344,13 @@ test('dict with literal keys', () => {
     validateResults(analysisResults, 7);
 });
 
+test('dict or frozendict return annotation bounds the returned shape', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_15;
+    const analysisResults = typeAnalyzeSampleFiles(['based_dict_return_shape.py'], configOptions);
+    validateResults(analysisResults, 6);
+});
+
 test('frozendict from the frozendict package', () => {
     const configOptions = new ConfigOptions(Uri.empty());
     configOptions.defaultPythonVersion = pythonVersion3_14;

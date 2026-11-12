@@ -21579,15 +21579,17 @@ export function createTypeEvaluator(
     function inferFunctionReturnType(
         node: FunctionNode,
         isAbstract: boolean,
-        callerNode: ExpressionNode | undefined
+        callerNode: ExpressionNode | undefined,
+        allowReturnAnnotation = false
     ): TypeResult | undefined {
         const returnAnnotation = node.d.returnAnnotation || node.d.funcAnnotationComment?.d.returnAnnotation;
 
         // This shouldn't be called if there is a declared return type, but it
         // can happen if there are unexpected cycles between decorators and
         // classes that they decorate. We'll just return an undefined type
-        // in this case.
-        if (returnAnnotation) {
+        // in this case. (A dict or frozendict return annotation asks for the
+        // body's type: see getShapedReturnTypeOfDict.)
+        if (returnAnnotation && !allowReturnAnnotation) {
             return undefined;
         }
 
@@ -21650,11 +21652,28 @@ export function createTypeEvaluator(
                         }
                     } else {
                         const inferredReturnTypes: Type[] = [];
+
+                        // With a return annotation, evaluate each return expression in the
+                        // context of the declared type, as the return statement itself is
+                        // (the type cache keeps whichever evaluation comes first).
+                        let declaredReturnType = returnAnnotation ? getDeclaredReturnType(node) : undefined;
+                        if (declaredReturnType) {
+                            declaredReturnType = makeTypeVarsBound(
+                                declaredReturnType,
+                                getTypeVarScopesForNode(node.d.suite)
+                            );
+                        }
+                        const returnInferenceContext = makeInferenceContext(declaredReturnType);
+
                         if (functionDecl?.returnStatements) {
                             functionDecl.returnStatements.forEach((returnNode) => {
                                 if (isNodeReachable(returnNode)) {
                                     if (returnNode.d.expr) {
-                                        const returnTypeResult = getTypeOfExpression(returnNode.d.expr);
+                                        const returnTypeResult = getTypeOfExpression(
+                                            returnNode.d.expr,
+                                            EvalFlags.None,
+                                            returnInferenceContext
+                                        );
                                         if (returnTypeResult.isIncomplete) {
                                             isIncomplete = true;
                                         }
@@ -25779,6 +25798,11 @@ export function createTypeEvaluator(
     function getEffectiveReturnTypeResult(type: FunctionType, options?: EffectiveReturnTypeOptions): TypeResult {
         const specializedReturnType = FunctionType.getEffectiveReturnType(type, /* includeInferred */ false);
         if (specializedReturnType && !isUnknown(specializedReturnType)) {
+            const shapedReturnType = getShapedReturnTypeOfDict(type, specializedReturnType);
+            if (shapedReturnType) {
+                return { type: shapedReturnType };
+            }
+
             // A partially-unknown *inferred* return type (e.g. `Foo | Unknown`) can be
             // cached on a specialized/bound copy of an unannotated function. Because
             // `isUnknown` matches only a fully-unknown type, such a partial type would
@@ -25813,6 +25837,95 @@ export function createTypeEvaluator(
         }
 
         return getInferredReturnTypeResult(type, options?.callSiteInfo);
+    }
+
+    // A dict or frozendict return annotation bounds the inferred shape instead of
+    // erasing it: when every return gives that class with the same known keys, and
+    // each key fits the declared key type and each value the declared value type,
+    // callers see those keys. A key's type is the declared value type (the
+    // annotation's intent wins), or the inferred one when that is Any, object or
+    // missing (a bare `-> dict`). Return statements are still checked against the
+    // declared type; stubs, py.typed libraries, async functions and bodies that
+    // give no single fitting shape keep the declared type.
+    function getShapedReturnTypeOfDict(type: FunctionType, declaredReturnType: Type): Type | undefined {
+        if (
+            !type.shared.declaredReturnType ||
+            !isClassInstance(declaredReturnType) ||
+            declaredReturnType.priv.knownEntries ||
+            !(ClassType.isBuiltIn(declaredReturnType, 'dict') || isFrozenDictClass(declaredReturnType))
+        ) {
+            return undefined;
+        }
+
+        const functionNode = type.shared.declaration?.node;
+        if (
+            !functionNode ||
+            functionNode.d.isAsync ||
+            FunctionType.isStubDefinition(type) ||
+            FunctionType.isPyTypedDefinition(type) ||
+            FunctionType.isOverloaded(type) ||
+            FunctionType.isParamSpecValue(type) ||
+            FunctionType.isAbstractMethod(type)
+        ) {
+            return undefined;
+        }
+
+        let inferredResult: TypeResult | undefined;
+        disableSpeculativeMode(() => {
+            inferredResult = inferFunctionReturnType(
+                functionNode,
+                /* isAbstract */ false,
+                /* callerNode */ undefined,
+                /* allowReturnAnnotation */ true
+            );
+        });
+
+        const inferredType = inferredResult?.type;
+        if (
+            !inferredType ||
+            inferredResult?.isIncomplete ||
+            !isClassInstance(inferredType) ||
+            !inferredType.priv.knownEntries ||
+            !ClassType.isSameGenericClass(inferredType, declaredReturnType)
+        ) {
+            return undefined;
+        }
+
+        // Externalize any TypeVars that appear in the inferred type.
+        const typeVarScopes: TypeVarScopeId[] = [];
+        if (type.shared.typeVarScopeId) {
+            typeVarScopes.push(type.shared.typeVarScopeId);
+        }
+        if (type.shared.methodClass?.shared.typeVarScopeId) {
+            typeVarScopes.push(type.shared.methodClass.shared.typeVarScopeId);
+        }
+        const shapedType = makeTypeVarsFree(inferredType, typeVarScopes) as ClassType;
+
+        // A bare annotation: the inferred shape as it is.
+        const typeArgs = declaredReturnType.priv.isTypeArgExplicit ? declaredReturnType.priv.typeArgs : undefined;
+        if (!typeArgs || typeArgs.length !== 2) {
+            return shapedType;
+        }
+
+        const [keyType, valueType] = typeArgs;
+        const strClass = getStrClassType();
+        if (!strClass) {
+            return undefined;
+        }
+        const keepInferredValues =
+            isAnyOrUnknown(valueType) || (isClassInstance(valueType) && ClassType.isBuiltIn(valueType, 'object'));
+
+        const entries = new Map<string, Type>();
+        for (const [key, entryType] of shapedType.priv.knownEntries!) {
+            const literalKey = ClassType.cloneAsInstance(ClassType.cloneWithLiteral(strClass, key));
+            if (!assignType(keyType, literalKey) || !assignType(valueType, entryType)) {
+                return undefined;
+            }
+            entries.set(key, keepInferredValues ? entryType : valueType);
+        }
+
+        // The declared type arguments stay, so a key that isn't known reads as V.
+        return ClassType.cloneForKnownEntries(declaredReturnType, entries, shapedType.priv.knownEntryOrigins);
     }
 
     function _getInferredReturnTypeResult(type: FunctionType, callSiteInfo?: CallSiteEvaluationInfo): TypeResult {
