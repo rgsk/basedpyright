@@ -46,6 +46,7 @@ import {
     isClass,
     isClassInstance,
     isInstantiableClass,
+    isTypeVarTuple,
     Type,
     TypeBase,
     UnknownType,
@@ -92,9 +93,26 @@ export function applyFrozenDictEntries(
         return returnType;
     }
 
-    const valueType = getValueType(returnType);
+    let shapedType = returnType;
+    let valueType = getValueType(returnType);
     if (!valueType) {
         return returnType;
+    }
+
+    // zip(('name', 'age'), ...) solves the key type as Literal['name', 'age'], and a
+    // tuple display of values keeps its literals. With known keys, widen them as a
+    // dict display's are: dict[str, ...], which prints as its entries.
+    const firstExpr = argList[0]?.valueExpression;
+    if (
+        !expectedType &&
+        !ClassType.isTorchModuleDict(returnType) &&
+        firstExpr &&
+        !argList[0].name &&
+        argList[0].argCategory === ArgCategory.Simple &&
+        isZipCall(evaluator, firstExpr)
+    ) {
+        valueType = stripLiteralsInTuples(evaluator, valueType);
+        shapedType = ClassType.specialize(returnType, [evaluator.getBuiltInObject(firstExpr, 'str'), valueType]);
     }
 
     // A ModuleDict takes a single mapping of modules.
@@ -105,7 +123,7 @@ export function applyFrozenDictEntries(
     // A frozendict's entries are exact, so they can't come from a dict's.
     const allowInexact = !isFrozenDictClass(returnType);
     const result = getEntriesFromArgs(evaluator, argList, valueType, allowInexact, expectedType);
-    return result ? ClassType.cloneForKnownEntries(returnType, result.entries, result.origins) : returnType;
+    return result ? ClassType.cloneForKnownEntries(shapedType, result.entries, result.origins) : returnType;
 }
 
 // Where a key was added (see ClassType's knownEntryOrigins).
@@ -197,11 +215,86 @@ function addEntriesFromArgs(
             if (!addDictDisplayEntries(evaluator, arg.valueExpression, sources, allowInexact)) {
                 return false;
             }
+        } else if (isZipCall(evaluator, arg.valueExpression)) {
+            if (!addZipEntries(evaluator, arg.valueExpression, sources)) {
+                return false;
+            }
         } else if (!addKnownEntries(evaluator.getTypeOfExpression(arg.valueExpression).type, sources, allowInexact)) {
             return false;
         }
     }
 
+    return true;
+}
+
+// A call to the builtin zip.
+function isZipCall(evaluator: TypeEvaluator, node: ExpressionNode): node is CallNode {
+    if (node.nodeType !== ParseNodeType.Call) {
+        return false;
+    }
+    const calleeType = evaluator.getTypeOfExpression(node.d.leftExpr).type;
+    return isInstantiableClass(calleeType) && ClassType.isBuiltIn(calleeType, 'zip');
+}
+
+// Adds the entries of zip(keys, values) (strict=... allowed), pairing them by position:
+//   dict(zip(('name', 'age'), load_person()))   load_person() -> tuple[str, int]
+// gives {'name': str, 'age': int}. The keys must be string literals in a list or
+// tuple display written in the call (a variable holding them gives a plain dict, as
+// fromkeys and comprehensions do), and the values a tuple of the same fixed length:
+// a tuple display, or anything typed as one. zip stops at the shorter of the two, so
+// with any other values (a list, say) a key may be missing at runtime.
+function addZipEntries(evaluator: TypeEvaluator, node: CallNode, sources: Map<string, EntrySource>): boolean {
+    const positional = node.d.args.filter((arg) => !arg.d.name);
+    if (
+        positional.length !== 2 ||
+        node.d.args.some(
+            (arg) => arg.d.argCategory !== ArgCategory.Simple || (arg.d.name && arg.d.name.d.value !== 'strict')
+        )
+    ) {
+        return false;
+    }
+
+    const keysExpr = positional[0].d.valueExpr;
+    if (keysExpr.nodeType !== ParseNodeType.List && keysExpr.nodeType !== ParseNodeType.Tuple) {
+        return false;
+    }
+    const keys: string[] = [];
+    for (const keyExpr of keysExpr.d.items) {
+        const key = getStringLiteral(evaluator.getTypeOfExpression(keyExpr).type);
+        if (key === undefined) {
+            return false;
+        }
+        keys.push(key);
+    }
+
+    // A tuple display: each value is evaluated (and widened) like a keyword argument's.
+    const valuesExpr = positional[1].d.valueExpr;
+    if (valuesExpr.nodeType === ParseNodeType.Tuple) {
+        const items = valuesExpr.d.items;
+        if (items.length !== keys.length || items.some((item) => item.nodeType === ParseNodeType.Unpack)) {
+            return false;
+        }
+        keys.forEach((key, i) => setSource(sources, key, { expr: items[i], origin: getKeyOrigin(keysExpr.d.items[i]) }));
+        return true;
+    }
+
+    // Anything else typed as a tuple of fixed length.
+    const valuesType = evaluator.getTypeOfExpression(valuesExpr).type;
+    const tupleArgs =
+        isClassInstance(valuesType) && isTupleClass(valuesType) ? valuesType.priv.tupleTypeArgs : undefined;
+    if (
+        !tupleArgs ||
+        tupleArgs.length !== keys.length ||
+        tupleArgs.some((arg) => arg.isUnbounded || isTypeVarTuple(arg.type))
+    ) {
+        return false;
+    }
+    keys.forEach((key, i) =>
+        setSource(sources, key, {
+            type: evaluator.stripLiteralValue(tupleArgs[i].type),
+            origin: getKeyOrigin(keysExpr.d.items[i]),
+        })
+    );
     return true;
 }
 

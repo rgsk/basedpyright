@@ -341,7 +341,7 @@ test('dict with literal keys', () => {
     configOptions.defaultPythonVersion = pythonVersion3_15;
     configOptions.diagnosticRuleSet.strictDictionaryInference = true;
     const analysisResults = typeAnalyzeSampleFiles(['based_dict_entries.py'], configOptions);
-    validateResults(analysisResults, 7);
+    validateResults(analysisResults, 8);
 });
 
 test('dict or frozendict return annotation bounds the returned shape', () => {

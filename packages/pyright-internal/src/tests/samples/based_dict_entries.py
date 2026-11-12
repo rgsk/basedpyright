@@ -418,6 +418,42 @@ def expected_types() -> None:
     assert_type(keyed["a"], int)
 
 
+def load_person() -> tuple[str, int]: ...
+
+
+def load_people() -> list[str]: ...
+
+
+def load_rest() -> tuple[str, *tuple[int, ...]]: ...
+
+
+def zipped() -> None:
+    # zip(keys, values) pairs a display of literal keys with a fixed-length tuple
+    # by position.
+    person = dict(zip(("name", "age"), load_person()))
+    reveal_type(person, expected_text="dict[{'name': str, 'age': int}]")
+    assert_type(person["age"], int)
+    reveal_type(dict(zip(["name", "age"], load_person())), expected_text="dict[{'name': str, 'age': int}]")
+    reveal_type(dict(zip(("name", "age"), ("rahul", 27))), expected_text="dict[{'name': str, 'age': int}]")
+    reveal_type(dict(zip(("name", "age"), load_person(), strict=True)), expected_text="dict[{'name': str, 'age': int}]")
+    p = load_person()
+    reveal_type(dict(zip(("name", "age"), p)), expected_text="dict[{'name': str, 'age': int}]")
+    fixed = frozendict(zip(("name", "age"), load_person()))
+    reveal_type(fixed, expected_text="frozendict[{'name': str, 'age': int}]")
+
+    # This should generate an error.
+    fixed["nmae"]
+
+    # Keys from a variable, values of unknown length, or lengths that differ: a plain
+    # dict, typed as zip solves it.
+    keys = ("name", "age")
+    reveal_type(dict(zip(keys, load_person())), expected_text="dict[Literal['name', 'age'], str | int]")
+    reveal_type(dict(zip(("a", "b"), load_people())), expected_text="dict[Literal['a', 'b'], str]")
+    reveal_type(dict(zip(("name",), load_person())), expected_text="dict[Literal['name'], str | int]")
+    reveal_type(dict(zip(("a", "b", "c"), load_person())), expected_text="dict[Literal['a', 'b', 'c'], str | int]")
+    reveal_type(dict(zip(("a", "b"), load_rest())), expected_text="dict[Literal['a', 'b'], str | int]")
+
+
 def comprehension() -> None:
     # A dict comprehension over a fixed set of literal keys knows its keys. Every key
     # has the value expression's type.
