@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import ReadOnly, TypedDict
 
 
@@ -22,3 +23,5 @@ def f(key: str, other: dict[str, int], movie: Movie) -> None:
     frozen = frozendict(name="rahul")
     frozen["name"]
     user[f"name"]
+    ns = SimpleNamespace(name="rahul")
+    ns["name"]  # not a key: a namespace can't be indexed

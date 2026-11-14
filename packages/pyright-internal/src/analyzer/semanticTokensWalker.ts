@@ -259,7 +259,8 @@ export class SemanticTokensWalker extends ParseTreeWalker {
                 }
                 return;
             }
-            const entries = subtype.priv.knownEntries;
+            // A SimpleNamespace's entries are attributes, not keys: it can't be indexed.
+            const entries = ClassType.isSimpleNamespace(subtype) ? undefined : subtype.priv.knownEntries;
             if (!entries || (!entries.has(key) && !(isWrite && !ClassType.hasExactKnownEntries(subtype)))) {
                 isKnown = false;
                 return;

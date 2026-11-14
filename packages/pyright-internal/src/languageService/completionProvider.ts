@@ -2960,7 +2960,13 @@ export class CompletionProvider {
             return keys;
         }
         doForEachSubtype(baseType, (subtype) => {
-            if (!isClassInstance(subtype) || !subtype.priv.knownEntries || ClassType.hasExactKnownEntries(subtype)) {
+            // A SimpleNamespace's entries are attributes: it can't be indexed.
+            if (
+                !isClassInstance(subtype) ||
+                !subtype.priv.knownEntries ||
+                ClassType.hasExactKnownEntries(subtype) ||
+                ClassType.isSimpleNamespace(subtype)
+            ) {
                 return;
             }
             subtype.priv.knownEntries.forEach((_, key) => {

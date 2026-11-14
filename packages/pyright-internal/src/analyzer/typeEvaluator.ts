@@ -24410,7 +24410,8 @@ export function createTypeEvaluator(
         // The first subtype that knows where the key was added.
         let origin: NameNode | StringListNode | undefined;
         doForEachSubtype(getTypeOfExpression(indexNode.d.leftExpr).type, (subtype) => {
-            if (!origin && isClassInstance(subtype)) {
+            // A SimpleNamespace's entries are attributes, not keys: it can't be indexed.
+            if (!origin && isClassInstance(subtype) && !ClassType.isSimpleNamespace(subtype)) {
                 origin = subtype.priv.knownEntryOrigins?.get(key);
             }
         });
@@ -24418,15 +24419,7 @@ export function createTypeEvaluator(
             return undefined;
         }
 
-        const fileInfo = nodeInfo.getFileInfo(origin);
-        return {
-            type: DeclarationType.Variable,
-            node: origin,
-            uri: fileInfo.fileUri,
-            range: convertOffsetsToRange(origin.start, TextRange.getEnd(origin), fileInfo.lines),
-            moduleName: fileInfo.moduleName,
-            isInExceptSuite: false,
-        };
+        return makeDeclForEntryOrigin(origin);
     }
 
     function getAliasFromImport(node: NameNode): NameNode | undefined {
@@ -24663,7 +24656,45 @@ export function createTypeEvaluator(
             }
         }
 
+        // An attribute of a SimpleNamespace (ns.name) is declared where it was added: a
+        // keyword argument, a key of a dict it was built from, or the write that added it.
+        if (decls.length === 0) {
+            const declForAttribute = getDeclForNamespaceAttribute(node);
+            if (declForAttribute) {
+                decls.push(declForAttribute);
+            }
+        }
+
         return { decls, synthesizedTypes };
+    }
+
+    function getDeclForNamespaceAttribute(node: NameNode): VariableDeclaration | undefined {
+        const memberAccess = node.parent;
+        if (memberAccess?.nodeType !== ParseNodeType.MemberAccess || memberAccess.d.member !== node) {
+            return undefined;
+        }
+
+        // The first namespace that knows where the attribute was added.
+        let origin: NameNode | StringListNode | undefined;
+        doForEachSubtype(getTypeOfExpression(memberAccess.d.leftExpr).type, (subtype) => {
+            if (!origin && isClassInstance(subtype) && ClassType.isSimpleNamespace(subtype)) {
+                origin = subtype.priv.knownEntryOrigins?.get(node.d.value);
+            }
+        });
+        return origin && origin !== node ? makeDeclForEntryOrigin(origin) : undefined;
+    }
+
+    // A declaration at the place where a known entry's key was added.
+    function makeDeclForEntryOrigin(origin: NameNode | StringListNode): VariableDeclaration {
+        const fileInfo = nodeInfo.getFileInfo(origin);
+        return {
+            type: DeclarationType.Variable,
+            node: origin,
+            uri: fileInfo.fileUri,
+            range: convertOffsetsToRange(origin.start, TextRange.getEnd(origin), fileInfo.lines),
+            moduleName: fileInfo.moduleName,
+            isInExceptSuite: false,
+        };
     }
 
     function getTypeForDeclaration(declaration: Declaration): DeclaredSymbolTypeInfo {

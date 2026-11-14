@@ -751,7 +751,11 @@ export class HoverProvider {
 
         const entryTypes: Type[] = [];
         doForEachSubtype(this._evaluator.getType(node.d.leftExpr) ?? UnknownType.create(), (subtype) => {
-            const entryType = isClassInstance(subtype) ? subtype.priv.knownEntries?.get(key) : undefined;
+            // A SimpleNamespace's entries are attributes, not keys: it can't be indexed.
+            const entryType =
+                isClassInstance(subtype) && !ClassType.isSimpleNamespace(subtype)
+                    ? subtype.priv.knownEntries?.get(key)
+                    : undefined;
             if (entryType) {
                 entryTypes.push(entryType);
             }
