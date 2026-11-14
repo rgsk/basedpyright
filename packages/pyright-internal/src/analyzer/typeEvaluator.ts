@@ -5757,14 +5757,28 @@ export function createTypeEvaluator(
         // An assignment below may make the effective type a union: the type here is one of
         // its dicts.
         const type = getDictTypeIfEffective(flowTypeResult.type ?? typeAtStart, effectiveType, /* allowSubtype */ true);
-        return (
-            type &&
-            mapSubtypes(type, (subtype) =>
-                isClassInstance(subtype) && subtype.priv.knownEntries
-                    ? ClassType.cloneForOuterScopeEntries(subtype)
-                    : subtype
-            )
-        );
+        return type && markOuterScopeEntries(type);
+    }
+
+    // Marks the known entries of the type as an outer scope's (see knownEntriesFromOuterScope),
+    // and those of the dicts, ModuleDicts and namespaces nested in its entries: code that ran
+    // before the function was called may have changed them too (app.db.x as well as app.x).
+    function markOuterScopeEntries(type: Type, recursionCount = 0): Type {
+        if (recursionCount > maxTypeRecursionCount) {
+            return type;
+        }
+        return mapSubtypes(type, (subtype) => {
+            if (!isClassInstance(subtype) || !subtype.priv.knownEntries) {
+                return subtype;
+            }
+            const entries = new Map<string, Type>();
+            subtype.priv.knownEntries.forEach((entryType, key) =>
+                entries.set(key, markOuterScopeEntries(entryType, recursionCount + 1))
+            );
+            return ClassType.cloneForOuterScopeEntries(
+                ClassType.cloneForKnownEntries(subtype, entries, subtype.priv.knownEntryOrigins)
+            );
+        });
     }
 
     // Whether the symbol is a dict or ModuleDict variable whose known entries may carry
@@ -25881,7 +25895,7 @@ export function createTypeEvaluator(
         return getInferredReturnTypeResult(type, options?.callSiteInfo);
     }
 
-    // A dict or frozendict return annotation bounds the inferred shape instead of
+    // A dict, frozendict or SimpleNamespace return annotation bounds the inferred shape instead of
     // erasing it: when every return gives that class with the same known keys, and
     // each key fits the declared key type and each value the declared value type,
     // callers see those keys. A key's type is the declared value type (the
@@ -25894,7 +25908,11 @@ export function createTypeEvaluator(
             !type.shared.declaredReturnType ||
             !isClassInstance(declaredReturnType) ||
             declaredReturnType.priv.knownEntries ||
-            !(ClassType.isBuiltIn(declaredReturnType, 'dict') || isFrozenDictClass(declaredReturnType))
+            !(
+                ClassType.isBuiltIn(declaredReturnType, 'dict') ||
+                isFrozenDictClass(declaredReturnType) ||
+                ClassType.isSimpleNamespace(declaredReturnType)
+            )
         ) {
             return undefined;
         }

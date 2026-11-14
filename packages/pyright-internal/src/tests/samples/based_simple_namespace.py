@@ -151,3 +151,36 @@ class Holder:
     def method(self) -> None:
         reveal_type(self.cfg, expected_text="SimpleNamespace")
         reveal_type(self.d, expected_text="dict[str, int]")
+
+
+def containers() -> None:
+    # SimpleNamespace's **kwargs are Any; the values keep their own types.
+    app = SimpleNamespace(version=(1, 4), tags=["web", "api"], opts={"a": 1})
+    reveal_type(app, expected_text="SimpleNamespace[{version: tuple[int, int], tags: list[str], opts: dict[{'a': int}]}]")
+
+
+nested_glob = SimpleNamespace(db=SimpleNamespace(host="h"))
+
+
+def reads_nested_global() -> None:
+    # Code that ran before the call may have added attributes to the inner namespace too.
+    db = nested_glob.db
+    assert_type(db.host, str)
+    db.users
+    nested_glob.db.users
+
+
+def returns_namespace() -> SimpleNamespace:
+    return SimpleNamespace(name="ada", age=3)
+
+
+def returns_either(flag: bool) -> SimpleNamespace:
+    if flag:
+        return SimpleNamespace(a=1)
+    return SimpleNamespace(b=2)
+
+
+def return_annotation() -> None:
+    # The annotation keeps the shape the body returns, as -> dict does.
+    reveal_type(returns_namespace(), expected_text="SimpleNamespace[{name: str, age: int}]")
+    reveal_type(returns_either(True), expected_text="SimpleNamespace")

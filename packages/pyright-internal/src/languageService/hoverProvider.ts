@@ -407,7 +407,11 @@ export class HoverProvider {
                                 let label = 'function';
                                 let isProperty = false;
 
-                                if (isMaybeDescriptorInstance(type, /* requireSetter */ false)) {
+                                if (this._isSimpleNamespaceAttribute(infoNode)) {
+                                    // A SimpleNamespace's attribute has no declaration: label it
+                                    // as an instance attribute is labelled.
+                                    label = 'variable';
+                                } else if (isMaybeDescriptorInstance(type, /* requireSetter */ false)) {
                                     isProperty = true;
                                     label = 'property';
                                 }
@@ -516,6 +520,24 @@ export class HoverProvider {
         }
 
         return null;
+    }
+
+    // Whether the name is the member of x.name where x is a SimpleNamespace.
+    private _isSimpleNamespaceAttribute(node: NameNode): boolean {
+        const parent = node.parent;
+        if (parent?.nodeType !== ParseNodeType.MemberAccess || parent.d.member !== node) {
+            return false;
+        }
+        const leftType = this._evaluator.getType(parent.d.leftExpr);
+        let isNamespace = false;
+        if (leftType) {
+            doForEachSubtype(leftType, (subtype) => {
+                if (isClassInstance(subtype) && ClassType.isSimpleNamespace(subtype)) {
+                    isNamespace = true;
+                }
+            });
+        }
+        return isNamespace;
     }
 
     private _addResultsForDeclaration(
