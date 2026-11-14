@@ -14,7 +14,15 @@
 import { ConsoleInterface } from '../common/console';
 import { assert, fail } from '../common/debug';
 import { convertOffsetToPosition } from '../common/positionUtils';
-import { ArgCategory, ExpressionNode, IndexNode, ParseNode, ParseNodeType, StringListNode } from '../parser/parseNodes';
+import {
+    ArgCategory,
+    ExpressionNode,
+    IndexNode,
+    MemberAccessNode,
+    ParseNode,
+    ParseNodeType,
+    StringListNode,
+} from '../parser/parseNodes';
 import { AnalyzerNodeInfoAccessor } from './analyzerNodeInfo';
 import {
     CodeFlowReferenceExpressionNode,
@@ -52,13 +60,14 @@ import {
     applySimpleNamespaceAttrCall,
     applySimpleNamespaceAttributeWrite,
     hasSimpleNamespaceWithKnownEntries,
+    isSimpleNamespaceInstance,
 } from './simpleNamespaces';
 import { getBoundCallMethod, getBoundNewMethod } from './constructors';
 import { DeclarationType } from './declaration';
 import {
-    isIndexedFromReference,
     isMatchingExpression,
     isPartialMatchingExpression,
+    isReachedFromReference,
     printExpression,
 } from './parseTreeUtils';
 import { getPatternSubtypeNarrowingCallback } from './patternMatching';
@@ -562,20 +571,22 @@ export function getCodeFlowEngine(
             }
 
             // Applies a change to an object the reference holds (the expression, as
-            // x[i] or x['a'][i] for the reference x) to the reference's type. Through
-            // dicts with known entries indexed by a known key, the change is applied
-            // to that key's entry. Elsewhere, the checker can't tell which object
-            // changed, so the dicts there lose their known entries.
+            // x[i], x['a'][i] or x.a for the reference x) to the reference's type.
+            // Through dicts with known entries indexed by a known key, and through
+            // the known attributes of SimpleNamespaces, the change is applied to that
+            // entry. Elsewhere in an index chain, the checker can't tell which object
+            // changed, so the dicts there lose their known entries; the attributes of
+            // other objects aren't tracked, so those are left as they are.
             function applyWriteThroughElement(
                 type: Type,
                 reference: CodeFlowReferenceExpressionNode,
                 expression: ExpressionNode,
                 applyChange: (type: Type) => Type
             ): Type {
-                const indexNodes: IndexNode[] = [];
+                const pathNodes: (IndexNode | MemberAccessNode)[] = [];
                 let curNode = expression;
-                while (curNode.nodeType === ParseNodeType.Index) {
-                    indexNodes.unshift(curNode);
+                while (curNode.nodeType === ParseNodeType.Index || curNode.nodeType === ParseNodeType.MemberAccess) {
+                    pathNodes.unshift(curNode);
                     if (isMatchingExpression(reference, curNode.d.leftExpr)) {
                         break;
                     }
@@ -583,12 +594,33 @@ export function getCodeFlowEngine(
                 }
 
                 const applyToIndex = (type: Type, index: number): Type => {
-                    if (index === indexNodes.length) {
+                    if (index === pathNodes.length) {
                         return applyChange(type);
                     }
 
-                    const key = getLiteralKeyOfIndex(evaluator, indexNodes[index]);
+                    const pathNode = pathNodes[index];
+                    if (pathNode.nodeType === ParseNodeType.MemberAccess) {
+                        const name = pathNode.d.member.d.value;
+                        return mapSubtypes(type, (subtype) => {
+                            const entryType = isSimpleNamespaceInstance(subtype)
+                                ? subtype.priv.knownEntries?.get(name)
+                                : undefined;
+                            if (!entryType || !isClass(subtype)) {
+                                return subtype;
+                            }
+
+                            const entries = new Map(subtype.priv.knownEntries);
+                            entries.set(name, applyToIndex(entryType, index + 1));
+                            return ClassType.cloneForKnownEntries(subtype, entries, subtype.priv.knownEntryOrigins);
+                        });
+                    }
+
+                    const key = getLiteralKeyOfIndex(evaluator, pathNode);
                     return mapSubtypes(type, (subtype) => {
+                        // A SimpleNamespace's entries are attributes, not keys.
+                        if (isClass(subtype) && ClassType.isSimpleNamespace(subtype)) {
+                            return subtype;
+                        }
                         const entryType =
                             key !== undefined && isClassInstance(subtype) && !ClassType.hasExactKnownEntries(subtype)
                                 ? subtype.priv.knownEntries?.get(key)
@@ -681,23 +713,28 @@ export function getCodeFlowEngine(
                         }
 
                         // Is this a call like setattr(x, 'name', value) or delattr(x, 'name')
-                        // that changes the attributes of a SimpleNamespace x?
+                        // that changes the attributes of a SimpleNamespace x (or of one x
+                        // holds, as for setattr(x.a, 'name', value))?
                         const callNode = callFlowNode.node;
                         if (
                             reference &&
                             callNode.d.leftExpr.nodeType === ParseNodeType.Name &&
                             (callNode.d.leftExpr.d.value === 'setattr' || callNode.d.leftExpr.d.value === 'delattr') &&
                             callNode.d.args.length > 0 &&
-                            isMatchingExpression(reference, callNode.d.args[0].d.valueExpr)
+                            (isMatchingExpression(reference, callNode.d.args[0].d.valueExpr) ||
+                                isReachedFromReference(reference, callNode.d.args[0].d.valueExpr))
                         ) {
+                            const targetExpr = callNode.d.args[0].d.valueExpr;
                             const mutatedResult = preventRecursion(curFlowNode, () => {
                                 const flowTypeResult = getTypeFromFlowNode(callFlowNode.antecedent);
-                                if (flowTypeResult.type && hasSimpleNamespaceWithKnownEntries(flowTypeResult.type)) {
-                                    flowTypeResult.type = applySimpleNamespaceAttrCall(
-                                        evaluator,
-                                        flowTypeResult.type,
-                                        callNode
-                                    );
+                                const applyCall = (type: Type) =>
+                                    hasSimpleNamespaceWithKnownEntries(type)
+                                        ? applySimpleNamespaceAttrCall(evaluator, type, callNode)
+                                        : type;
+                                if (flowTypeResult.type) {
+                                    flowTypeResult.type = isMatchingExpression(reference, targetExpr)
+                                        ? applyCall(flowTypeResult.type)
+                                        : applyWriteThroughElement(flowTypeResult.type, reference, targetExpr, applyCall);
                                 }
                                 return flowTypeResult;
                             });
@@ -712,11 +749,11 @@ export function getCodeFlowEngine(
                             const receiverNode = callNode.d.leftExpr.d.leftExpr;
                             const isWriteThroughElement =
                                 dictMutatorMethodNames.has(methodName) &&
-                                isIndexedFromReference(reference, receiverNode);
+                                isReachedFromReference(reference, receiverNode);
                             const isContainerAdd =
                                 containerAddMethodNames.has(methodName) &&
                                 (isMatchingExpression(reference, receiverNode) ||
-                                    isIndexedFromReference(reference, receiverNode));
+                                    isReachedFromReference(reference, receiverNode));
                             if (isWriteThroughElement || isContainerAdd) {
                                 const mutatedResult = preventRecursion(curFlowNode, () => {
                                     const flowTypeResult = getTypeFromFlowNode(callFlowNode.antecedent);
@@ -890,7 +927,7 @@ export function getCodeFlowEngine(
                             // dict the reference holds?
                             if (
                                 targetNode.nodeType === ParseNodeType.Index &&
-                                isIndexedFromReference(reference, targetNode.d.leftExpr)
+                                isReachedFromReference(reference, targetNode.d.leftExpr)
                             ) {
                                 const narrowedResult = preventRecursion(assignmentFlowNode, () => {
                                     const flowTypeResult = getTypeFromFlowNode(assignmentFlowNode.antecedent);
@@ -909,21 +946,28 @@ export function getCodeFlowEngine(
                             }
 
                             // Is this a write to (or deletion of) x.name, which changes the
-                            // attributes of a SimpleNamespace x?
+                            // attributes of a SimpleNamespace x, or of x.a.name (at any
+                            // depth), which changes a SimpleNamespace x holds?
                             if (
                                 targetNode.nodeType === ParseNodeType.MemberAccess &&
-                                isMatchingExpression(reference, targetNode.d.leftExpr)
+                                (isMatchingExpression(reference, targetNode.d.leftExpr) ||
+                                    isReachedFromReference(reference, targetNode.d.leftExpr))
                             ) {
                                 const narrowedResult = preventRecursion(assignmentFlowNode, () => {
                                     const flowTypeResult = getTypeFromFlowNode(assignmentFlowNode.antecedent);
-                                    if (
-                                        flowTypeResult.type &&
-                                        hasSimpleNamespaceWithKnownEntries(flowTypeResult.type)
-                                    ) {
-                                        flowTypeResult.type = applySimpleNamespaceWriteForFlowNode(
-                                            flowTypeResult.type,
-                                            assignmentFlowNode
-                                        );
+                                    const applyWrite = (type: Type) =>
+                                        hasSimpleNamespaceWithKnownEntries(type)
+                                            ? applySimpleNamespaceWriteForFlowNode(type, assignmentFlowNode)
+                                            : type;
+                                    if (flowTypeResult.type) {
+                                        flowTypeResult.type = isMatchingExpression(reference, targetNode.d.leftExpr)
+                                            ? applyWrite(flowTypeResult.type)
+                                            : applyWriteThroughElement(
+                                                  flowTypeResult.type,
+                                                  reference,
+                                                  targetNode.d.leftExpr,
+                                                  applyWrite
+                                              );
                                     }
                                     return flowTypeResult;
                                 });

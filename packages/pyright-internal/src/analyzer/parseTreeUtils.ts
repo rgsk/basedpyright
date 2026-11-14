@@ -1420,11 +1420,12 @@ export function isPartialMatchingExpression(reference: ExpressionNode, expressio
 }
 
 // Whether the expression is an object the reference holds, at any depth, reached by
-// indexing it (x[i], x[i][j], x['a'][i] for the reference x): a write to (or
-// through) the expression changes an object inside the reference.
-export function isIndexedFromReference(reference: ExpressionNode, expression: ExpressionNode): boolean {
+// indexing it or reading its attributes (x[i], x[i][j], x['a'][i], x.a, x.a['b'] for
+// the reference x): a write to (or through) the expression changes an object inside
+// the reference.
+export function isReachedFromReference(reference: ExpressionNode, expression: ExpressionNode): boolean {
     let curNode = expression;
-    while (curNode.nodeType === ParseNodeType.Index) {
+    while (curNode.nodeType === ParseNodeType.Index || curNode.nodeType === ParseNodeType.MemberAccess) {
         if (isMatchingExpression(reference, curNode.d.leftExpr)) {
             return true;
         }

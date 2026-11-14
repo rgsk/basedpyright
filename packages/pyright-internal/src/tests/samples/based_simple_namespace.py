@@ -184,3 +184,24 @@ def return_annotation() -> None:
     # The annotation keeps the shape the body returns, as -> dict does.
     reveal_type(returns_namespace(), expected_text="SimpleNamespace[{name: str, age: int}]")
     reveal_type(returns_either(True), expected_text="SimpleNamespace")
+
+
+def nested_writes() -> None:
+    # A write or deletion through attributes (and dict keys) changes the outer shape too.
+    user = SimpleNamespace(name="ada", wife=SimpleNamespace(name="eve", age=24))
+    user.wife.name = 2
+    reveal_type(user, expected_text="SimpleNamespace[{name: str, wife: SimpleNamespace[{name: int, age: int}]}]")
+    del user.wife.name
+    reveal_type(user, expected_text="SimpleNamespace[{name: str, wife: SimpleNamespace[{age: int}]}]")
+    setattr(user.wife, "city", "x")
+    delattr(user.wife, "age")
+    reveal_type(user, expected_text="SimpleNamespace[{name: str, wife: SimpleNamespace[{city: str}]}]")
+
+    ns = SimpleNamespace(cfg={"a": 1}, kid=SimpleNamespace(deep=SimpleNamespace(z=1)))
+    ns.cfg["b"] = 2
+    ns.kid.deep.z = "s"
+    reveal_type(ns, expected_text="SimpleNamespace[{cfg: dict[{'a': int, 'b': int}], kid: SimpleNamespace[{deep: SimpleNamespace[{z: str}]}]}]")
+
+    d = {"w": SimpleNamespace(name="a")}
+    d["w"].name = 3
+    reveal_type(d, expected_text="dict[{'w': SimpleNamespace[{name: int}]}]")

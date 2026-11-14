@@ -912,14 +912,13 @@ export class Binder extends ParseTreeWalker {
             this._addContainerReferenceKeys(node.d.leftExpr.d.leftExpr);
         }
         // A call like setattr(x, 'name', value) or delattr(x, 'name') may change the
-        // attributes of a SimpleNamespace x.
+        // attributes of a SimpleNamespace x (or of one x holds, for setattr(x.a, ...)).
         if (
             node.d.leftExpr.nodeType === ParseNodeType.Name &&
             (node.d.leftExpr.d.value === 'setattr' || node.d.leftExpr.d.value === 'delattr') &&
-            node.d.args.length > 0 &&
-            isCodeFlowSupportedForReference(node.d.args[0].d.valueExpr)
+            node.d.args.length > 0
         ) {
-            this._currentScopeCodeFlowExpressions!.add(createKeyForReference(node.d.args[0].d.valueExpr));
+            this._addContainerReferenceKeys(node.d.args[0].d.valueExpr);
         }
 
         // Create a call flow node. We'll skip this if the call is part of
@@ -3627,12 +3626,10 @@ export class Binder extends ParseTreeWalker {
             case ParseNodeType.Name:
             case ParseNodeType.MemberAccess: {
                 // A write to (or deletion of) x.name may change the attributes of a
-                // SimpleNamespace x, so the code flow analysis of x must see it.
-                if (
-                    target.nodeType === ParseNodeType.MemberAccess &&
-                    isCodeFlowSupportedForReference(target.d.leftExpr)
-                ) {
-                    this._currentScopeCodeFlowExpressions!.add(createKeyForReference(target.d.leftExpr));
+                // SimpleNamespace x, or of one held by x.a, x['a'] or a deeper path,
+                // so the code flow analysis of those must see it.
+                if (target.nodeType === ParseNodeType.MemberAccess) {
+                    this._addContainerReferenceKeys(target.d.leftExpr);
                 }
                 this._createFlowAssignment(target, unbound);
                 if (walkTargets) {
@@ -3783,7 +3780,8 @@ export class Binder extends ParseTreeWalker {
     }
 
     // Adds the reference keys of the expression and the expressions it's indexed from
-    // (x[i] and x for x[i][j]) that code flow analysis supports. Whether there were any.
+    // or an attribute of (x[i] and x for x[i][j], x.a and x for x.a[j]) that code flow
+    // analysis supports. Whether there were any.
     private _addContainerReferenceKeys(expression: ExpressionNode): boolean {
         let isAdded = false;
         let curNode: ExpressionNode = expression;
@@ -3792,7 +3790,7 @@ export class Binder extends ParseTreeWalker {
                 this._currentScopeCodeFlowExpressions!.add(createKeyForReference(curNode));
                 isAdded = true;
             }
-            if (curNode.nodeType !== ParseNodeType.Index) {
+            if (curNode.nodeType !== ParseNodeType.Index && curNode.nodeType !== ParseNodeType.MemberAccess) {
                 return isAdded;
             }
             curNode = curNode.d.leftExpr;
