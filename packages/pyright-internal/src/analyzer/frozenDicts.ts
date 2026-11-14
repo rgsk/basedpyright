@@ -158,7 +158,7 @@ function getKeyOrigin(node: ExpressionNode): KeyOrigin | undefined {
 // **unpacking: frozendict(a=1), frozendict({'a': 1}, b=2), frozendict(other, b=2),
 // frozendict(**other, b=2). A dict display or a mapping must have known string keys:
 // literals, or the entries of another frozendict with known entries.
-function getEntriesFromArgs(
+export function getEntriesFromArgs(
     evaluator: TypeEvaluator,
     argList: Arg[],
     valueType: Type,
@@ -274,7 +274,9 @@ function addZipEntries(evaluator: TypeEvaluator, node: CallNode, sources: Map<st
         if (items.length !== keys.length || items.some((item) => item.nodeType === ParseNodeType.Unpack)) {
             return false;
         }
-        keys.forEach((key, i) => setSource(sources, key, { expr: items[i], origin: getKeyOrigin(keysExpr.d.items[i]) }));
+        keys.forEach((key, i) =>
+            setSource(sources, key, { expr: items[i], origin: getKeyOrigin(keysExpr.d.items[i]) })
+        );
         return true;
     }
 
@@ -576,7 +578,7 @@ function resolveEntries(
 
 // Like stripLiteralValue, but also widens the literal elements of a tuple
 // (recursively), as solving the frozendict's value type does.
-function stripLiteralsInTuples(evaluator: TypeEvaluator, type: Type): Type {
+export function stripLiteralsInTuples(evaluator: TypeEvaluator, type: Type): Type {
     return mapSubtypes(type, (subtype) => {
         if (!isClassInstance(subtype) || !isTupleClass(subtype) || !subtype.priv.tupleTypeArgs) {
             return evaluator.stripLiteralValue(subtype);

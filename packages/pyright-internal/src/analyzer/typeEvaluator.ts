@@ -169,6 +169,7 @@ import {
     getTypeOfIndexedFrozenDict,
     isFrozenDictClass,
 } from './frozenDicts';
+import { applyVarsCall } from './simpleNamespaces';
 import { applyFunctionTransform } from './functionTransform';
 import { createNamedTupleType } from './namedTuples';
 import {
@@ -5773,7 +5774,9 @@ export function createTypeEvaluator(
         doForEachSubtype(effectiveType, (subtype) => {
             if (
                 isClassInstance(subtype) &&
-                (ClassType.isBuiltIn(subtype, 'dict') || ClassType.isTorchModuleDict(subtype))
+                (ClassType.isBuiltIn(subtype, 'dict') ||
+                    ClassType.isTorchModuleDict(subtype) ||
+                    ClassType.isSimpleNamespace(subtype))
             ) {
                 hasDict = true;
             }
@@ -6626,6 +6629,34 @@ export function createTypeEvaluator(
                                 diag.getEffectiveTextRange() ?? node.d.member
                             );
                         }
+                    }
+                }
+
+                // A SimpleNamespace's known attributes. Reading one it doesn't have is an
+                // error, unless the class has it (ns.__dict__) or the attributes are an
+                // outer scope's (code that runs before the read may have added it).
+                if (
+                    !typeResult &&
+                    usage.method === 'get' &&
+                    isClassInstance(baseType) &&
+                    ClassType.isSimpleNamespace(baseType) &&
+                    baseType.priv.knownEntries
+                ) {
+                    const entryType = baseType.priv.knownEntries.get(memberName);
+                    if (entryType) {
+                        typeResult = { type: entryType };
+                    } else if (
+                        !baseType.priv.knownEntriesFromOuterScope &&
+                        !lookUpObjectMember(baseType, memberName, MemberAccessFlags.SkipAttributeAccessOverride)
+                    ) {
+                        if (!isIncomplete) {
+                            addDiagnostic(
+                                DiagnosticRule.reportAttributeAccessIssue,
+                                LocMessage.memberAccess().format({ name: memberName, type: printType(baseType) }),
+                                node.d.member
+                            );
+                        }
+                        typeResult = { type: UnknownType.create(isIncomplete) };
                     }
                 }
 
@@ -8906,7 +8937,12 @@ export function createTypeEvaluator(
         }
 
         // Handle reads of a frozendict or dict with known entries specially.
-        if (isClassInstance(baseType) && baseType.priv.knownEntries && usage.method === 'get') {
+        if (
+            isClassInstance(baseType) &&
+            baseType.priv.knownEntries &&
+            !ClassType.isSimpleNamespace(baseType) &&
+            usage.method === 'get'
+        ) {
             const typeFromFrozenDict = getTypeOfIndexedFrozenDict(evaluatorInterface, node, baseType);
             if (typeFromFrozenDict) {
                 return typeFromFrozenDict;
@@ -9545,6 +9581,12 @@ export function createTypeEvaluator(
                 } else {
                     typeResult.overloadsUsedForCall = callResult.overloadsUsedForCall;
                     typeResult.type = applyFrozenDictMethodCall(evaluatorInterface, node, typeResult.type);
+                    const varsFunction = isOverloaded(baseTypeResult.type)
+                        ? OverloadedType.getOverloads(baseTypeResult.type)[0]
+                        : baseTypeResult.type;
+                    if (varsFunction && isFunction(varsFunction) && FunctionType.isBuiltIn(varsFunction, 'vars')) {
+                        typeResult.type = applyVarsCall(evaluatorInterface, node, typeResult.type);
+                    }
                 }
 
                 if (callResult.isTypeIncomplete) {

@@ -861,6 +861,8 @@ export interface ClassDetailsPriv {
     //   argument) keep them, until a write through the container that the
     //   checker can't follow to one dict (see removeDictKnownEntriesInContents).
     //   They never cause errors by themselves; they only make reads more precise.
+    // - types.SimpleNamespace: its attributes, kept like a dict's keys. Reading
+    //   one they don't have is an error (see simpleNamespaces.ts).
     knownEntries?: Map<string, Type> | undefined;
 
     // Where each known entry's key was added, for go-to-definition on a key: the key
@@ -1090,8 +1092,17 @@ export namespace ClassType {
     // change) rather than what the checker has seen of a dict so far.
     export function hasExactKnownEntries(classType: ClassType): boolean {
         return (
-            !!classType.priv.knownEntries && !ClassType.isBuiltIn(classType, 'dict') && !isTorchModuleDict(classType)
+            !!classType.priv.knownEntries &&
+            !ClassType.isBuiltIn(classType, 'dict') &&
+            !isTorchModuleDict(classType) &&
+            !isSimpleNamespace(classType)
         );
+    }
+
+    // types.SimpleNamespace (not its subclasses). Its known entries are its attributes:
+    // what the checker has seen of it, like a dict's keys (see simpleNamespaces.ts).
+    export function isSimpleNamespace(classType: ClassType): boolean {
+        return classType.shared.fullName === 'types.SimpleNamespace';
     }
 
     // PyTorch's nn.ModuleDict (not its subclasses). Built from a dict with literal keys,

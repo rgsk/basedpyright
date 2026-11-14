@@ -479,6 +479,43 @@ function assignToProtocolInternal(
             let isSrcReadOnly = false;
             let isDestReadOnly = false;
 
+            // A SimpleNamespace's known attribute matches a protocol's attribute when its
+            // type fits. The attribute's type is inferred, not declared, so invariance
+            // isn't enforced.
+            const namespaceEntryType =
+                isClassInstance(srcType) &&
+                !sourceIsClassObject &&
+                ClassType.isSimpleNamespace(srcType) &&
+                destSymbol.getDeclarations().some((decl) => decl.type === DeclarationType.Variable)
+                    ? srcType.priv.knownEntries?.get(name)
+                    : undefined;
+            if (namespaceEntryType) {
+                if (!ClassType.isSameGenericClass(mroClass, destType)) {
+                    destMemberType = partiallySpecializeType(
+                        destMemberType,
+                        mroClass,
+                        evaluator.getTypeClassType(),
+                        selfType
+                    );
+                }
+                destMemberType = applySolvedTypeVars(destMemberType, selfSolution);
+                const subDiag = diag?.createAddendum();
+                if (
+                    !evaluator.assignType(
+                        destMemberType,
+                        namespaceEntryType,
+                        subDiag?.createAddendum(),
+                        protocolConstraints,
+                        assignTypeFlags,
+                        recursionCount
+                    )
+                ) {
+                    subDiag?.addMessage(LocAddendum.memberTypeMismatch().format({ name }));
+                    typesAreConsistent = false;
+                }
+                return;
+            }
+
             if (isClass(srcType)) {
                 // Look in the metaclass first if we're treating the source as an instantiable class.
                 if (

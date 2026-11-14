@@ -1154,12 +1154,14 @@ function printObjectTypeForClassInternal(
     // prints its type arguments instead. A dict that started as {} has an unknown key
     // type: it prints its entries once it has some (d = {}; d['a'] = 1 is
     // dict[{'a': int}]), and dict[Unknown, Unknown] until then. A ModuleDict (not
-    // generic) prints the same way: ModuleDict[{'body': Linear}].
+    // generic) prints the same way: ModuleDict[{'body': Linear}]. So does a
+    // SimpleNamespace, with its attributes as names: SimpleNamespace[{host: str}].
     const keyTypeArg = type.priv.typeArgs?.[0];
     if (
         type.priv.knownEntries &&
         (ClassType.hasExactKnownEntries(type) ||
             ClassType.isTorchModuleDict(type) ||
+            ClassType.isSimpleNamespace(type) ||
             (keyTypeArg && isClassInstance(keyTypeArg) && ClassType.isBuiltIn(keyTypeArg, 'str')) ||
             (keyTypeArg && isUnknown(keyTypeArg) && type.priv.knownEntries.size > 0))
     ) {
@@ -1173,7 +1175,10 @@ function printObjectTypeForClassInternal(
                 recursionCount,
                 importTracker
             );
-            return `${printStringLiteralKey(key)}: ${entryTypeText}`;
+            // A SimpleNamespace's attributes print as names: SimpleNamespace[{host: str}].
+            const keyText =
+                ClassType.isSimpleNamespace(type) && isIdentifierName(key) ? key : printStringLiteralKey(key);
+            return `${keyText}: ${entryTypeText}`;
         });
 
         // The spelling uses the class's own name, not an alias such as typing.Dict
@@ -1818,6 +1823,10 @@ export function getPrintTypeFlags(configOptions: ConfigOptions): PrintTypeFlags 
     }
 
     return flags;
+}
+
+function isIdentifierName(value: string): boolean {
+    return /^[\p{L}_][\p{L}\p{N}_]*$/u.test(value);
 }
 
 function printStringLiteralKey(value: string): string {

@@ -344,6 +344,13 @@ test('dict with literal keys', () => {
     validateResults(analysisResults, 8);
 });
 
+test('SimpleNamespace attributes', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    const analysisResults = typeAnalyzeSampleFiles(['based_simple_namespace.py'], configOptions);
+    validateResults(analysisResults, 5);
+});
+
 test('dict or frozendict return annotation bounds the returned shape', () => {
     const configOptions = new ConfigOptions(Uri.empty());
     configOptions.defaultPythonVersion = pythonVersion3_15;

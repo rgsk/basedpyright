@@ -911,6 +911,16 @@ export class Binder extends ParseTreeWalker {
         ) {
             this._addContainerReferenceKeys(node.d.leftExpr.d.leftExpr);
         }
+        // A call like setattr(x, 'name', value) or delattr(x, 'name') may change the
+        // attributes of a SimpleNamespace x.
+        if (
+            node.d.leftExpr.nodeType === ParseNodeType.Name &&
+            (node.d.leftExpr.d.value === 'setattr' || node.d.leftExpr.d.value === 'delattr') &&
+            node.d.args.length > 0 &&
+            isCodeFlowSupportedForReference(node.d.args[0].d.valueExpr)
+        ) {
+            this._currentScopeCodeFlowExpressions!.add(createKeyForReference(node.d.args[0].d.valueExpr));
+        }
 
         // Create a call flow node. We'll skip this if the call is part of
         // a decorator. We assume that decorators are not NoReturn functions.
@@ -3616,6 +3626,14 @@ export class Binder extends ParseTreeWalker {
         switch (target.nodeType) {
             case ParseNodeType.Name:
             case ParseNodeType.MemberAccess: {
+                // A write to (or deletion of) x.name may change the attributes of a
+                // SimpleNamespace x, so the code flow analysis of x must see it.
+                if (
+                    target.nodeType === ParseNodeType.MemberAccess &&
+                    isCodeFlowSupportedForReference(target.d.leftExpr)
+                ) {
+                    this._currentScopeCodeFlowExpressions!.add(createKeyForReference(target.d.leftExpr));
+                }
                 this._createFlowAssignment(target, unbound);
                 if (walkTargets) {
                     this.walk(target);

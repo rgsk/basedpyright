@@ -1114,6 +1114,24 @@ export class CompletionProvider {
                 }
             }
 
+            // A SimpleNamespace's known attributes, with their types.
+            if (
+                resolvedClassSubtype &&
+                TypeBase.isInstance(resolvedClassSubtype) &&
+                ClassType.isSimpleNamespace(resolvedClassSubtype) &&
+                resolvedClassSubtype.priv.knownEntries
+            ) {
+                resolvedClassSubtype.priv.knownEntries.forEach((entryType, name) => {
+                    if (!/^[\p{L}_][\p{L}\p{N}_]*$/u.test(name)) {
+                        return;
+                    }
+                    this.addNameToCompletions(name, CompletionItemKind.Field, priorWord, completionMap, {
+                        sortText: this.makeSortText(SortCategory.NormalSymbol, name),
+                        itemDetail: this.evaluator.printType(entryType),
+                    });
+                });
+            }
+
             this._addSymbolsForSymbolTable(
                 symbolTable,
                 () => true,

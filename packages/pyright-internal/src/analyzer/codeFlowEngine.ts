@@ -46,7 +46,13 @@ import {
     hasDictWithKnownEntries,
     isDictKeyChangedByMutatorCall,
     removeDictKnownEntriesInContents,
+    stripLiteralsInTuples,
 } from './frozenDicts';
+import {
+    applySimpleNamespaceAttrCall,
+    applySimpleNamespaceAttributeWrite,
+    hasSimpleNamespaceWithKnownEntries,
+} from './simpleNamespaces';
 import { getBoundCallMethod, getBoundNewMethod } from './constructors';
 import { DeclarationType } from './declaration';
 import {
@@ -511,6 +517,40 @@ export function getCodeFlowEngine(
             }
 
             // Applies the write (or deletion) of an assignment flow node whose target is
+            // x.name to the known attributes of a SimpleNamespace x.
+            function applySimpleNamespaceWriteForFlowNode(type: Type, flowNode: FlowAssignment): Type {
+                const targetNode = flowNode.node;
+                assert(targetNode.nodeType === ParseNodeType.MemberAccess);
+                const nameNode = targetNode.d.member;
+                if (flowNode.flags & FlowFlags.Unbind) {
+                    return applySimpleNamespaceAttributeWrite(type, nameNode, undefined, /* isDelete */ true);
+                }
+
+                // The assigned value's type, evaluated speculatively as for a dict's index
+                // write (see applyDictIndexWriteForFlowNode).
+                let assignedType: Type | undefined;
+                const parentNode = targetNode.parent;
+                if (parentNode?.nodeType === ParseNodeType.Assignment && parentNode.d.leftExpr === targetNode) {
+                    const valueExpr = parentNode.d.rightExpr;
+                    assignedType = evaluator.useSpeculativeMode(valueExpr, () =>
+                        evaluator.getTypeOfExpression(valueExpr)
+                    ).type;
+                } else if (
+                    parentNode?.nodeType === ParseNodeType.AugmentedAssignment &&
+                    parentNode.d.destExpr === targetNode
+                ) {
+                    assignedType = evaluateAssignmentFlowNode(flowNode)?.type;
+                }
+
+                return applySimpleNamespaceAttributeWrite(
+                    type,
+                    nameNode,
+                    assignedType && stripLiteralsInTuples(evaluator, assignedType),
+                    /* isDelete */ false
+                );
+            }
+
+            // Applies the write (or deletion) of an assignment flow node whose target is
             // x[...] to x: to its known entries if it's a dict, and to the dicts it holds,
             // since a dict put in x may have other keys than the dicts there.
             function applyIndexWriteToContainer(type: Type, flowNode: FlowAssignment): Type {
@@ -640,9 +680,33 @@ export function getCodeFlowEngine(
                             return setCacheEntry(curFlowNode, /* type */ undefined, /* isIncomplete */ false);
                         }
 
+                        // Is this a call like setattr(x, 'name', value) or delattr(x, 'name')
+                        // that changes the attributes of a SimpleNamespace x?
+                        const callNode = callFlowNode.node;
+                        if (
+                            reference &&
+                            callNode.d.leftExpr.nodeType === ParseNodeType.Name &&
+                            (callNode.d.leftExpr.d.value === 'setattr' || callNode.d.leftExpr.d.value === 'delattr') &&
+                            callNode.d.args.length > 0 &&
+                            isMatchingExpression(reference, callNode.d.args[0].d.valueExpr)
+                        ) {
+                            const mutatedResult = preventRecursion(curFlowNode, () => {
+                                const flowTypeResult = getTypeFromFlowNode(callFlowNode.antecedent);
+                                if (flowTypeResult.type && hasSimpleNamespaceWithKnownEntries(flowTypeResult.type)) {
+                                    flowTypeResult.type = applySimpleNamespaceAttrCall(
+                                        evaluator,
+                                        flowTypeResult.type,
+                                        callNode
+                                    );
+                                }
+                                return flowTypeResult;
+                            });
+
+                            return setCacheEntry(curFlowNode, mutatedResult.type, !!mutatedResult.isIncomplete);
+                        }
+
                         // Is this a call like x[i].update(...) that changes the keys of a dict
                         // the reference holds, or x.append(...) that puts a dict in it?
-                        const callNode = callFlowNode.node;
                         if (reference && callNode.d.leftExpr.nodeType === ParseNodeType.MemberAccess) {
                             const methodName = callNode.d.leftExpr.d.member.d.value;
                             const receiverNode = callNode.d.leftExpr.d.leftExpr;
@@ -836,6 +900,29 @@ export function getCodeFlowEngine(
                                             reference,
                                             targetNode.d.leftExpr,
                                             (type) => applyIndexWriteToContainer(type, assignmentFlowNode)
+                                        );
+                                    }
+                                    return flowTypeResult;
+                                });
+
+                                return setCacheEntry(curFlowNode, narrowedResult?.type, !!narrowedResult?.isIncomplete);
+                            }
+
+                            // Is this a write to (or deletion of) x.name, which changes the
+                            // attributes of a SimpleNamespace x?
+                            if (
+                                targetNode.nodeType === ParseNodeType.MemberAccess &&
+                                isMatchingExpression(reference, targetNode.d.leftExpr)
+                            ) {
+                                const narrowedResult = preventRecursion(assignmentFlowNode, () => {
+                                    const flowTypeResult = getTypeFromFlowNode(assignmentFlowNode.antecedent);
+                                    if (
+                                        flowTypeResult.type &&
+                                        hasSimpleNamespaceWithKnownEntries(flowTypeResult.type)
+                                    ) {
+                                        flowTypeResult.type = applySimpleNamespaceWriteForFlowNode(
+                                            flowTypeResult.type,
+                                            assignmentFlowNode
                                         );
                                     }
                                     return flowTypeResult;

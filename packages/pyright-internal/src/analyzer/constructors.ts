@@ -21,6 +21,7 @@ import { addConstraintsForExpectedType } from './constraintSolver';
 import { ConstraintTracker } from './constraintTracker';
 import { applyConstructorTransform, hasConstructorTransform } from './constructorTransform';
 import { applyFrozenDictEntries, isKnownEntriesClass } from './frozenDicts';
+import { applySimpleNamespaceEntries } from './simpleNamespaces';
 import { Arg, CallResult, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import {
     ClassType,
@@ -251,6 +252,16 @@ export function validateConstructorArgs(
             returnResult.returnType,
             inferenceContext?.expectedType
         );
+    }
+
+    // Record the attributes of a SimpleNamespace.
+    if (
+        returnResult.returnType &&
+        !returnResult.argumentErrors &&
+        !returnResult.isTypeIncomplete &&
+        ClassType.isSimpleNamespace(type)
+    ) {
+        returnResult.returnType = applySimpleNamespaceEntries(evaluator, argList, returnResult.returnType);
     }
 
     return returnResult;
