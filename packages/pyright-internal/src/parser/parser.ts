@@ -3139,6 +3139,12 @@ export class Parser {
         }
         const delNode = DelNode.create(this._getOwnerKey(), delToken);
         delNode.d.targets = exprListResult.list;
+
+        // Keep an incomplete target (del x.) in the tree, as other statements do, so
+        // completion can find it.
+        if (exprListResult.parseError) {
+            delNode.d.targets.push(exprListResult.parseError);
+        }
         if (delNode.d.targets.length > 0) {
             delNode.d.targets.forEach((expr) => {
                 expr.parent = delNode;
