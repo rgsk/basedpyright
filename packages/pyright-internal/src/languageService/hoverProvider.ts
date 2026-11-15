@@ -395,7 +395,18 @@ export class HoverProvider {
                         // this if it's part of a module name, since a module name part with no declaration
                         // is a directory (a namespace package), and we don't want to provide any hover
                         // information in that case.
-                        if (parts.length === 0) {
+                        const keywordEntryType = this._getSimpleNamespaceKeywordEntryType(infoNode);
+                        if (parts.length === 0 && keywordEntryType) {
+                            // A keyword of a call that builds a SimpleNamespace names one of its
+                            // attributes: show that attribute's type, not the **kwargs parameter's.
+                            this._addResultsPart(
+                                parts,
+                                `(variable) ${infoNode.d.value}: ${this._evaluator.printType(keywordEntryType, {
+                                    multilineKnownEntries: true,
+                                })}`,
+                                /* python */ true
+                            );
+                        } else if (parts.length === 0) {
                             const type = this._getType(infoNode);
                             let typeText: string;
                             if (isModule(type)) {
@@ -520,6 +531,47 @@ export class HoverProvider {
         }
 
         return null;
+    }
+
+    // The SimpleNamespace a call builds, given its callee (SimpleNamespace or types.SimpleNamespace),
+    // when the result has known attributes.
+    private _getSimpleNamespaceCallResultType(node: NameNode): ClassType | undefined {
+        let callee: ExpressionNode = node;
+        if (node.parent?.nodeType === ParseNodeType.MemberAccess && node.parent.d.member === node) {
+            callee = node.parent;
+        }
+        const call = callee.parent;
+        if (call?.nodeType !== ParseNodeType.Call || call.d.leftExpr !== callee) {
+            return undefined;
+        }
+        const resultType = this._evaluator.getType(call);
+        if (
+            resultType &&
+            isClassInstance(resultType) &&
+            ClassType.isSimpleNamespace(resultType) &&
+            resultType.priv.knownEntries
+        ) {
+            return resultType;
+        }
+        return undefined;
+    }
+
+    // The type of the attribute a keyword names in a call that builds a SimpleNamespace:
+    // wife in SimpleNamespace(wife=SimpleNamespace(name='x')).
+    private _getSimpleNamespaceKeywordEntryType(node: NameNode): Type | undefined {
+        const argument = node.parent;
+        if (argument?.nodeType !== ParseNodeType.Argument || argument.d.name !== node) {
+            return undefined;
+        }
+        const call = argument.parent;
+        if (call?.nodeType !== ParseNodeType.Call) {
+            return undefined;
+        }
+        const resultType = this._evaluator.getType(call);
+        if (resultType && isClassInstance(resultType) && ClassType.isSimpleNamespace(resultType)) {
+            return resultType.priv.knownEntries?.get(node.d.value);
+        }
+        return undefined;
     }
 
     // Whether the name is the member of x.name where x is a SimpleNamespace.
@@ -648,6 +700,21 @@ export class HoverProvider {
 
             case DeclarationType.Class:
             case DeclarationType.SpecialBuiltInClass: {
+                // The callee of a call that builds a SimpleNamespace shows what this call builds,
+                // not the constructor's (always the same) signature.
+                const namespaceType = this._getSimpleNamespaceCallResultType(node);
+                if (namespaceType) {
+                    this._addResultsPart(
+                        parts,
+                        `(class) ${node.d.value}(...) -> ${this._evaluator.printType(namespaceType, {
+                            multilineKnownEntries: true,
+                        })}`,
+                        /* python */ true
+                    );
+                    this._addDocumentationPart(parts, node, resolvedDecl);
+                    break;
+                }
+
                 if (this._addConstructorSignatureAndDocumentation(node, parts, resolvedDecl)) {
                     return;
                 }
