@@ -61,6 +61,7 @@ import {
     isInstantiableClass,
     isModule,
     isUnknown,
+    UnknownType,
     Type,
     TypeBase,
     TypeCategory,
@@ -4061,10 +4062,21 @@ export class CompletionProvider {
             }
         });
 
+        // A SimpleNamespace built where a Protocol is expected: the Protocol's attributes.
+        const attributeDetails = this._getExpectedNamespaceAttributes(signatureInfo.callNode);
+        attributeDetails?.forEach((_, name) => argNameSet.add(name));
+
         // Remove any named parameters that are already provided.
         signatureInfo.callNode.d.args!.forEach((arg) => {
             if (arg.d.name) {
                 argNameSet.delete(arg.d.name.d.value);
+            } else if (attributeDetails && arg.d.argCategory === ArgCategory.UnpackedDictionary) {
+                // **vars(defaults) or **dict(...) with known keys already gives those attributes.
+                doForEachSubtype(this.evaluator.getType(arg.d.valueExpr) ?? UnknownType.create(), (subtype) => {
+                    if (isClassInstance(subtype)) {
+                        subtype.priv.knownEntries?.forEach((_, key) => argNameSet.delete(key));
+                    }
+                });
             }
         });
 
@@ -4082,6 +4094,10 @@ export class CompletionProvider {
                 completionItem.data = this.createCompletionItemData({});
                 completionItem.sortText = this.makeSortText(SortCategory.NamedParameter, argName);
                 completionItem.filterText = argName;
+                const attributeDetail = attributeDetails?.get(argName);
+                if (attributeDetail) {
+                    completionItem.detail = attributeDetail;
+                }
 
                 // If the text immediately after the cursor already starts with
                 // `=`, extend the replacement range so we don't end up with
@@ -4096,6 +4112,47 @@ export class CompletionProvider {
         });
     }
 
+    // For SimpleNamespace(...) whose expected type is a Protocol (cfg: Config =
+    // SimpleNamespace(...)), the Protocol's attribute names, with their printed types.
+    private _getExpectedNamespaceAttributes(callNode: CallNode): Map<string, string> | undefined {
+        const calleeType = this.evaluator.getType(callNode.d.leftExpr);
+        if (!calleeType || !isInstantiableClass(calleeType) || !ClassType.isSimpleNamespace(calleeType)) {
+            return undefined;
+        }
+
+        const expectedTypeResult = this.evaluator.getExpectedType(callNode);
+        if (!expectedTypeResult || expectedTypeResult.node !== callNode) {
+            return undefined;
+        }
+
+        const attributes = new Map<string, string>();
+        doForEachSubtype(expectedTypeResult.type, (subtype) => {
+            if (!isClassInstance(subtype) || !ClassType.isProtocolClass(subtype)) {
+                return;
+            }
+            subtype.shared.mro.forEach((mroClass) => {
+                if (!isInstantiableClass(mroClass) || !ClassType.isProtocolClass(mroClass)) {
+                    return;
+                }
+                ClassType.getSymbolTable(mroClass).forEach((symbol, name) => {
+                    if (
+                        attributes.has(name) ||
+                        symbol.isIgnoredForProtocolMatch() ||
+                        !(symbol.isClassMember() || symbol.isInstanceMember()) ||
+                        !symbol.getDeclarations().some((decl) => decl.type === DeclarationType.Variable) ||
+                        SymbolNameUtils.isPrivateOrProtectedName(name) ||
+                        !Tokenizer.isPythonIdentifier(name)
+                    ) {
+                        return;
+                    }
+                    attributes.set(name, this.evaluator.printType(this.evaluator.getEffectiveTypeOfSymbol(symbol)));
+                });
+            });
+        });
+
+        return attributes.size > 0 ? attributes : undefined;
+    }
+
     private _addNamedParametersToMap(type: FunctionType, names: Set<string>) {
         const paramDetails = getParamListDetails(type);
 
@@ -4103,7 +4160,9 @@ export class CompletionProvider {
             if (
                 paramInfo.param.name &&
                 paramInfo.kind !== ParamKind.Positional &&
-                paramInfo.kind !== ParamKind.ExpandedArgs
+                paramInfo.kind !== ParamKind.ExpandedArgs &&
+                // **kwargs collects other keywords: "kwargs=" isn't a parameter to fill in.
+                paramInfo.param.category !== ParamCategory.KwargsDict
             ) {
                 if (
                     !SymbolNameUtils.isPrivateOrProtectedName(paramInfo.param.name) &&
