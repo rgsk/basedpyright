@@ -20,6 +20,8 @@
 ////     [|/*marker1*/|]
 //// )
 //// other = SimpleNamespace([|/*marker2*/|])
+//// same_line: Config = SimpleNamespace(vocab_size=65, block_size=8, [|/*marker3*/|])
+//// after_dot: Config = SimpleNamespace(lr=1.[|/*marker4*/|])
 
 {
     // The Protocol's attributes not given yet, with their types.
@@ -65,5 +67,26 @@
         marker1: {
             completions: [{ label: 'kwargs=', kind: Consts.CompletionItemKind.Variable }],
         },
+    });
+}
+
+{
+    // On the same line, right after a number argument: still offered.
+    // @ts-ignore
+    await helper.verifyCompletion('included', 'markdown', {
+        marker3: {
+            completions: [
+                { label: 'n_layer=', kind: Consts.CompletionItemKind.Variable, detail: 'int' },
+                { label: 'lr=', kind: Consts.CompletionItemKind.Variable, detail: 'float' },
+            ],
+        },
+    });
+}
+
+{
+    // Typing a number's "." still offers nothing.
+    // @ts-ignore
+    await helper.verifyCompletion('exact', 'markdown', {
+        marker4: { completions: [] },
     });
 }

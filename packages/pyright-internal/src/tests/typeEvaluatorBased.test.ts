@@ -348,7 +348,14 @@ test('SimpleNamespace attributes', () => {
     const configOptions = new ConfigOptions(Uri.empty());
     configOptions.defaultPythonVersion = pythonVersion3_14;
     const analysisResults = typeAnalyzeSampleFiles(['based_simple_namespace.py'], configOptions);
-    validateResults(analysisResults, 5);
+    validateResults(analysisResults, 6);
+});
+
+test('a dict, frozendict or SimpleNamespace inside a return annotation keeps the returned shapes', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    const analysisResults = typeAnalyzeSampleFiles(['based_shaped_return_nested.py'], configOptions);
+    validateResults(analysisResults, 1);
 });
 
 test('dict or frozendict return annotation bounds the returned shape', () => {

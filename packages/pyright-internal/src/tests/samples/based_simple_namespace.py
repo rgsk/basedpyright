@@ -5,7 +5,7 @@
 
 from types import SimpleNamespace
 from types import SimpleNamespace as namespace
-from typing import Any, Literal, Protocol, assert_type
+from typing import Any, ClassVar, Literal, Protocol, assert_type
 
 
 def constructor() -> None:
@@ -205,3 +205,39 @@ def nested_writes() -> None:
     d = {"w": SimpleNamespace(name="a")}
     d["w"].name = 3
     reveal_type(d, expected_text="dict[{'w': SimpleNamespace[{name: int}]}]")
+
+
+# vars() of a Protocol: its data attributes, not its methods, properties or ClassVars.
+class Account(Protocol):
+    id: int
+    email: str
+    password: str
+    kind: ClassVar[str]
+
+    @property
+    def label(self) -> str: ...
+
+    def greet(self) -> str: ...
+
+
+class Public(Protocol):
+    id: int
+    email: str
+
+
+class Box[T](Protocol):
+    item: T
+
+
+def hide(a: Account) -> Public:
+    reveal_type(vars(a), expected_text="dict[{'id': int, 'email': str, 'password': str}]")
+    p = namespace(**vars(a))
+    del p.password
+    reveal_type(p, expected_text="SimpleNamespace[{id: int, email: str}]")
+    # This should generate an error.
+    p.password
+    return p
+
+
+def generic_protocol(b: Box[int]) -> None:
+    reveal_type(vars(b), expected_text="dict[{'item': int}]")

@@ -16,10 +16,11 @@
  */
 
 import { ArgCategory, CallNode, NameNode, ParseNodeType } from '../parser/parseNodes';
+import { DeclarationType } from './declaration';
 import { getEntriesFromArgs, stripLiteralsInTuples } from './frozenDicts';
 import { Arg, TypeEvaluator } from './typeEvaluatorTypes';
 import { ClassType, isClassInstance, Type, UnknownType } from './types';
-import { mapSubtypes } from './typeUtils';
+import { getProtocolSymbols, lookUpObjectMember, mapSubtypes } from './typeUtils';
 
 export function isSimpleNamespaceInstance(type: Type): type is ClassType {
     return isClassInstance(type) && ClassType.isSimpleNamespace(type);
@@ -109,15 +110,44 @@ export function applyVarsCall(evaluator: TypeEvaluator, node: CallNode, returnTy
     }
 
     const argType = evaluator.getTypeOfExpression(node.d.args[0].d.valueExpr).type;
-    if (!isSimpleNamespaceInstance(argType) || !argType.priv.knownEntries) {
-        return returnType;
+    if (isSimpleNamespaceInstance(argType) && argType.priv.knownEntries) {
+        return ClassType.cloneForKnownEntries(
+            returnType,
+            new Map(argType.priv.knownEntries),
+            argType.priv.knownEntryOrigins
+        );
     }
 
-    return ClassType.cloneForKnownEntries(
-        returnType,
-        new Map(argType.priv.knownEntries),
-        argType.priv.knownEntryOrigins
-    );
+    const protocolEntries = getProtocolDataAttributes(evaluator, argType);
+    return protocolEntries ? ClassType.cloneForKnownEntries(returnType, protocolEntries) : returnType;
+}
+
+// vars(x) where x is a Protocol: its data attributes (name: type), as the object's
+// __dict__ holds them when it is a namespace or a plain instance. Methods, properties
+// and ClassVars live on the class, so they aren't entries. An object that satisfies
+// the Protocol another way (a property, __slots__) isn't caught, as elsewhere for a
+// Protocol; extra attributes the object has are fine, as for any shape.
+function getProtocolDataAttributes(evaluator: TypeEvaluator, type: Type): Map<string, Type> | undefined {
+    if (!isClassInstance(type) || !ClassType.isProtocolClass(type)) {
+        return undefined;
+    }
+
+    const entries = new Map<string, Type>();
+    getProtocolSymbols(type).forEach((member, name) => {
+        const declarations = member.symbol.getDeclarations();
+        if (
+            member.isClassVar ||
+            (name.startsWith('__') && name.endsWith('__')) ||
+            declarations.length === 0 ||
+            !declarations.every((decl) => decl.type === DeclarationType.Variable)
+        ) {
+            return;
+        }
+        const specializedMember = lookUpObjectMember(type, name);
+        entries.set(name, specializedMember ? evaluator.getTypeOfMember(specializedMember) : UnknownType.create());
+    });
+
+    return entries.size > 0 ? entries : undefined;
 }
 
 // Code flow analysis: the type of a namespace after setattr(ns, 'name', value) or

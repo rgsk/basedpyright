@@ -1562,7 +1562,10 @@ export class CompletionProvider {
                     if (
                         (curNode.nodeType === ParseNodeType.StringList ||
                             curNode.nodeType === ParseNodeType.String ||
-                            curNode.nodeType === ParseNodeType.FormatString) &&
+                            curNode.nodeType === ParseNodeType.FormatString ||
+                            // Same for a number (f(a=1, ‸)): the guard against completing after `1.`
+                            // would otherwise return nothing.
+                            curNode.nodeType === ParseNodeType.Number) &&
                         !(TextRange.contains(curNode, offset) || TextRange.getEnd(curNode) === offset)
                     ) {
                         // When completing after something like a trailing comma, ParseTreeUtils may return the

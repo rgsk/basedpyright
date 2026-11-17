@@ -25927,24 +25927,18 @@ export function createTypeEvaluator(
     }
 
     // A dict, frozendict or SimpleNamespace return annotation bounds the inferred shape instead of
-    // erasing it: when every return gives that class with the same known keys, and
-    // each key fits the declared key type and each value the declared value type,
-    // callers see those keys. A key's type is the declared value type (the
-    // annotation's intent wins), or the inferred one when that is Any, object or
-    // missing (a bare `-> dict`). Return statements are still checked against the
-    // declared type; stubs, py.typed libraries, async functions and bodies that
-    // give no single fitting shape keep the declared type.
+    // erasing it, also where the class sits inside the annotation (list[SimpleNamespace],
+    // dict[str, dict], SimpleNamespace | None, tuple[dict, int]): when the body gives
+    // the same classes with known keys, callers see them. For a dict with known keys,
+    // each key must fit the declared key type and each value the declared value type,
+    // and a key's type is the declared value type (the annotation's intent wins) with
+    // any shapes inside it, or the inferred one when that is Any, object or missing (a
+    // bare `-> dict`). Only the annotation's own classes are followed: an inferred list
+    // under a Sequence annotation keeps Sequence. Return statements are still checked
+    // against the declared type; stubs, py.typed libraries, async functions and bodies
+    // that give no single fitting shape keep the declared type.
     function getShapedReturnTypeOfDict(type: FunctionType, declaredReturnType: Type): Type | undefined {
-        if (
-            !type.shared.declaredReturnType ||
-            !isClassInstance(declaredReturnType) ||
-            declaredReturnType.priv.knownEntries ||
-            !(
-                ClassType.isBuiltIn(declaredReturnType, 'dict') ||
-                isFrozenDictClass(declaredReturnType) ||
-                ClassType.isSimpleNamespace(declaredReturnType)
-            )
-        ) {
+        if (!type.shared.declaredReturnType || !hasShapeableClass(declaredReturnType, 0)) {
             return undefined;
         }
 
@@ -25972,13 +25966,7 @@ export function createTypeEvaluator(
         });
 
         const inferredType = inferredResult?.type;
-        if (
-            !inferredType ||
-            inferredResult?.isIncomplete ||
-            !isClassInstance(inferredType) ||
-            !inferredType.priv.knownEntries ||
-            !ClassType.isSameGenericClass(inferredType, declaredReturnType)
-        ) {
+        if (!inferredType || inferredResult?.isIncomplete) {
             return undefined;
         }
 
@@ -25990,12 +25978,218 @@ export function createTypeEvaluator(
         if (type.shared.methodClass?.shared.typeVarScopeId) {
             typeVarScopes.push(type.shared.methodClass.shared.typeVarScopeId);
         }
-        const shapedType = makeTypeVarsFree(inferredType, typeVarScopes) as ClassType;
 
-        // A bare annotation: the inferred shape as it is.
-        const typeArgs = declaredReturnType.priv.isTypeArgExplicit ? declaredReturnType.priv.typeArgs : undefined;
+        // The body's type as the checker sees it, in the context of the annotation, and
+        // each return expression on its own: in that context a list display or a
+        // comprehension takes the declared item type ([make()] under list[SimpleNamespace]
+        // is list[SimpleNamespace]), so its items' shapes are only seen without it.
+        const candidates = [inferredType];
+        const contextFreeType = getContextFreeReturnType(type);
+        if (contextFreeType) {
+            candidates.push(contextFreeType);
+        }
+
+        return shapeDeclaredType(
+            declaredReturnType,
+            candidates.map((candidate) => makeTypeVarsFree(candidate, typeVarScopes)),
+            0
+        );
+    }
+
+    // The union of the return expressions' types, each evaluated with no expected type
+    // and without writing to the type cache. Only the returned expression itself is
+    // evaluated again (the cache holds it in the annotation's context): a display
+    // nested in it ({"a": [x]}) is still read from the cache.
+    function getContextFreeReturnType(type: FunctionType): Type | undefined {
+        const returnStatements = type.shared.declaration?.returnStatements;
+        if (!returnStatements || returnStatements.length === 0) {
+            return undefined;
+        }
+
+        const returnTypes: Type[] = [];
+        for (const returnNode of returnStatements) {
+            if (!isNodeReachable(returnNode) || !returnNode.d.expr) {
+                continue;
+            }
+            const expr = returnNode.d.expr;
+            const result = useSpeculativeMode(expr, () => getTypeOfExpressionCore(expr, EvalFlags.None));
+            if (result.isIncomplete) {
+                return undefined;
+            }
+            returnTypes.push(result.type);
+        }
+
+        return returnTypes.length > 0 ? combineTypes(returnTypes) : undefined;
+    }
+
+    const maxShapedReturnDepth = 8;
+
+    function isShapeableClass(type: ClassType) {
+        return (
+            !type.priv.knownEntries &&
+            (ClassType.isBuiltIn(type, 'dict') || isFrozenDictClass(type) || ClassType.isSimpleNamespace(type))
+        );
+    }
+
+    // Whether a dict, frozendict or SimpleNamespace without known keys appears in the type.
+    function hasShapeableClass(type: Type, depth: number): boolean {
+        if (depth > maxShapedReturnDepth) {
+            return false;
+        }
+        if (isUnion(type)) {
+            return type.priv.subtypes.some((subtype) => hasShapeableClass(subtype, depth + 1));
+        }
+        if (!isClassInstance(type)) {
+            return false;
+        }
+        if (isShapeableClass(type)) {
+            return true;
+        }
+        const args = type.priv.tupleTypeArgs?.map((arg) => arg.type) ?? type.priv.typeArgs ?? [];
+        return args.some((arg) => hasShapeableClass(arg, depth + 1));
+    }
+
+    // The declared type with the inferred shapes put in, or undefined when none fits.
+    // `inferred` holds the body's types in order of preference: at each level the
+    // first one that has a shape there gives it.
+    function shapeDeclaredType(declared: Type, inferred: Type[], depth: number): Type | undefined {
+        if (depth > maxShapedReturnDepth || inferred.length === 0) {
+            return undefined;
+        }
+
+        if (isUnion(declared)) {
+            // Each declared member takes the one inferred member of its class.
+            let changed = false;
+            const result = mapSubtypes(declared, (declaredSubtype) => {
+                const matches: Type[] = [];
+                inferred.forEach((candidate) => {
+                    const candidateMatches: Type[] = [];
+                    doForEachSubtype(candidate, (inferredSubtype) => {
+                        if (
+                            isClassInstance(declaredSubtype) &&
+                            isClassInstance(inferredSubtype) &&
+                            ClassType.isSameGenericClass(declaredSubtype, inferredSubtype)
+                        ) {
+                            candidateMatches.push(inferredSubtype);
+                        }
+                    });
+                    if (candidateMatches.length === 1) {
+                        matches.push(candidateMatches[0]);
+                    }
+                });
+                const shaped = shapeDeclaredType(declaredSubtype, matches, depth + 1);
+                if (shaped) {
+                    changed = true;
+                    return shaped;
+                }
+                return declaredSubtype;
+            });
+            return changed ? result : undefined;
+        }
+
+        if (!isClassInstance(declared)) {
+            return undefined;
+        }
+        const matching = inferred.filter(
+            (candidate): candidate is ClassType =>
+                isClassInstance(candidate) && ClassType.isSameGenericClass(candidate, declared)
+        );
+        if (matching.length === 0) {
+            return undefined;
+        }
+
+        if (isShapeableClass(declared)) {
+            const shapedCandidate = matching.find((candidate) => candidate.priv.knownEntries);
+            if (shapedCandidate) {
+                return shapeKnownEntries(declared, shapedCandidate, matching, depth);
+            }
+        }
+
+        // A container: its type arguments, item by item.
+        if (declared.priv.tupleTypeArgs) {
+            const declaredArgs = declared.priv.tupleTypeArgs;
+            const candidateArgs = matching
+                .map((candidate) => candidate.priv.tupleTypeArgs)
+                .filter(
+                    (args): args is TupleTypeArg[] =>
+                        !!args &&
+                        args.length === declaredArgs.length &&
+                        args.every((arg, index) => arg.isUnbounded === declaredArgs[index].isUnbounded)
+                );
+            let changed = false;
+            const newArgs = declaredArgs.map((arg, index) => {
+                const shaped = shapeDeclaredType(
+                    arg.type,
+                    candidateArgs.map((args) => args[index].type),
+                    depth + 1
+                );
+                if (!shaped) {
+                    return arg;
+                }
+                changed = true;
+                return { ...arg, type: shaped };
+            });
+            return changed ? specializeTupleClass(declared, newArgs) : undefined;
+        }
+
+        const declaredArgs = declared.priv.isTypeArgExplicit ? declared.priv.typeArgs : undefined;
+        if (!declaredArgs) {
+            return undefined;
+        }
+        const candidateArgs = matching
+            .map((candidate) => candidate.priv.typeArgs)
+            .filter((args): args is Type[] => !!args && args.length === declaredArgs.length);
+        let changed = false;
+        const newArgs = declaredArgs.map((arg, index) => {
+            const shaped = shapeDeclaredType(
+                arg,
+                candidateArgs.map((args) => args[index]),
+                depth + 1
+            );
+            if (!shaped) {
+                return arg;
+            }
+            changed = true;
+            return shaped;
+        });
+        return changed ? ClassType.specialize(declared, newArgs, /* isTypeArgExplicit */ true) : undefined;
+    }
+
+    // A declared dict, frozendict or SimpleNamespace given the inferred known keys.
+    // `others` are the other inferred types of this class, for the shapes in its values.
+    function shapeKnownEntries(
+        declared: ClassType,
+        inferred: ClassType,
+        others: ClassType[],
+        depth: number
+    ): Type | undefined {
+        const valueCandidates = (key: string, entryType: Type) => [
+            entryType,
+            ...others
+                .filter((other) => other !== inferred)
+                .map((other) => other.priv.knownEntries?.get(key))
+                .filter((other): other is Type => !!other),
+        ];
+
+        // A bare annotation: the inferred shape as it is, with any shapes its values
+        // have only without the annotation's context.
+        const typeArgs = declared.priv.isTypeArgExplicit ? declared.priv.typeArgs : undefined;
         if (!typeArgs || typeArgs.length !== 2) {
-            return shapedType;
+            if (others.length <= 1) {
+                return inferred;
+            }
+            let changed = false;
+            const entries = new Map<string, Type>();
+            for (const [key, entryType] of inferred.priv.knownEntries!) {
+                const shaped = shapeDeclaredType(entryType, valueCandidates(key, entryType).slice(1), depth + 1);
+                if (shaped) {
+                    changed = true;
+                }
+                entries.set(key, shaped ?? entryType);
+            }
+            return changed
+                ? ClassType.cloneForKnownEntries(inferred, entries, inferred.priv.knownEntryOrigins)
+                : inferred;
         }
 
         const [keyType, valueType] = typeArgs;
@@ -26007,16 +26201,21 @@ export function createTypeEvaluator(
             isAnyOrUnknown(valueType) || (isClassInstance(valueType) && ClassType.isBuiltIn(valueType, 'object'));
 
         const entries = new Map<string, Type>();
-        for (const [key, entryType] of shapedType.priv.knownEntries!) {
+        for (const [key, entryType] of inferred.priv.knownEntries!) {
             const literalKey = ClassType.cloneAsInstance(ClassType.cloneWithLiteral(strClass, key));
             if (!assignType(keyType, literalKey) || !assignType(valueType, entryType)) {
                 return undefined;
             }
-            entries.set(key, keepInferredValues ? entryType : valueType);
+            entries.set(
+                key,
+                keepInferredValues
+                    ? entryType
+                    : shapeDeclaredType(valueType, valueCandidates(key, entryType), depth + 1) ?? valueType
+            );
         }
 
         // The declared type arguments stay, so a key that isn't known reads as V.
-        return ClassType.cloneForKnownEntries(declaredReturnType, entries, shapedType.priv.knownEntryOrigins);
+        return ClassType.cloneForKnownEntries(declared, entries, inferred.priv.knownEntryOrigins);
     }
 
     function _getInferredReturnTypeResult(type: FunctionType, callSiteInfo?: CallSiteEvaluationInfo): TypeResult {
