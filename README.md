@@ -1,3 +1,8 @@
+> **This is a fork (branch `dev`).** It adds per-key types for dicts and frozendicts, SimpleNamespace attributes,
+> and PyTorch module types (calls through `forward`, `Sequential`/`ModuleList` contents, `float ** float`).
+> Docs and runnable demonstrations: [rgsk/basedpyright-fork-features-demo](https://github.com/rgsk/basedpyright-fork-features-demo).
+> Everything below is upstream basedpyright's README.
+
 <h1><img src="https://docs.basedpyright.com/latest/img/readme_logo.png"> basedpyright</h1>
 
 <!-- --8<-- [start:header] -->
