@@ -1148,6 +1148,36 @@ function printObjectTypeForClassInternal(
         importTracker?.add(type.shared, objName);
     }
 
+    // An nn.ModuleList built from modules prints their type: ModuleList[Block].
+    if (type.priv.torchModuleListElement && ClassType.isTorchModuleList(type)) {
+        const elementText = printTypeInternal(
+            type.priv.torchModuleListElement,
+            printTypeFlags,
+            returnTypeCallback,
+            uniqueNameMap,
+            recursionTypes,
+            recursionCount,
+            importTracker
+        );
+        return `${objName}[${elementText}]`;
+    }
+
+    // An nn.Sequential built from modules prints them in order: Sequential[Linear, GELU, Linear].
+    if (type.priv.torchSequentialModules && ClassType.isTorchSequential(type)) {
+        const moduleTexts = type.priv.torchSequentialModules.map((module) =>
+            printTypeInternal(
+                module,
+                printTypeFlags,
+                returnTypeCallback,
+                uniqueNameMap,
+                recursionTypes,
+                recursionCount,
+                importTracker
+            )
+        );
+        return `${objName}[${moduleTexts.join(', ')}]`;
+    }
+
     // A frozendict or dict with known entries prints them as they are spelled in a
     // type expression: frozendict[{'name': str, 'age': int}]. That spelling implies
     // str keys, so a dict with another key type (d: dict[object, int] = {'a': 1})

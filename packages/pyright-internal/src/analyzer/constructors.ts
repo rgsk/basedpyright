@@ -15,7 +15,7 @@
 import { appendArray } from '../common/collectionUtils';
 import { DiagnosticAddendum } from '../common/diagnostic';
 import { DiagnosticRule } from '../common/diagnosticRules';
-import { ExpressionNode, ParamCategory } from '../parser/parseNodes';
+import { ArgCategory, ExpressionNode, ParamCategory } from '../parser/parseNodes';
 import { ConstraintSolution } from './constraintSolution';
 import { addConstraintsForExpectedType } from './constraintSolver';
 import { ConstraintTracker } from './constraintTracker';
@@ -40,6 +40,7 @@ import {
     isFunction,
     isFunctionOrOverloaded,
     isInstantiableClass,
+    isAnyOrUnknown,
     isNever,
     isOverloaded,
     isPositionOnlySeparator,
@@ -252,6 +253,54 @@ export function validateConstructorArgs(
             returnResult.returnType,
             inferenceContext?.expectedType
         );
+    }
+
+    // Record the modules of an nn.Sequential built from modules: Sequential(Linear(...), GELU()).
+    if (
+        returnResult.returnType &&
+        !returnResult.argumentErrors &&
+        !returnResult.isTypeIncomplete &&
+        isClassInstance(returnResult.returnType) &&
+        ClassType.isTorchSequential(type) &&
+        argList.length > 0 &&
+        argList.every((arg) => arg.argCategory === ArgCategory.Simple && !arg.name)
+    ) {
+        const modules = argList.map(
+            (arg) =>
+                arg.typeResult?.type ??
+                (arg.valueExpression ? evaluator.getTypeOfExpression(arg.valueExpression).type : undefined)
+        );
+        if (modules.every((module) => module && isClassInstance(module))) {
+            returnResult.returnType = ClassType.cloneForTorchSequentialModules(
+                returnResult.returnType,
+                modules as Type[]
+            );
+        }
+    }
+
+    // Record the module type of an nn.ModuleList built from modules: ModuleList([Block() for _ in ...]).
+    if (
+        returnResult.returnType &&
+        !returnResult.argumentErrors &&
+        !returnResult.isTypeIncomplete &&
+        isClassInstance(returnResult.returnType) &&
+        ClassType.isTorchModuleList(type) &&
+        argList.length === 1 &&
+        argList[0].argCategory === ArgCategory.Simple &&
+        !argList[0].name &&
+        argList[0].valueExpression
+    ) {
+        const iterableType =
+            argList[0].typeResult?.type ?? evaluator.getTypeOfExpression(argList[0].valueExpression).type;
+        const element = evaluator.getTypeOfIterator(
+            { type: iterableType },
+            /* isAsync */ false,
+            argList[0].valueExpression,
+            /* emitNotIterableError */ false
+        )?.type;
+        if (element && !isAnyOrUnknown(element) && !isNever(element)) {
+            returnResult.returnType = ClassType.cloneForTorchModuleListElement(returnResult.returnType, element);
+        }
     }
 
     // Record the attributes of a SimpleNamespace.

@@ -824,6 +824,7 @@ export interface TypeEvaluator {
         flags?: MemberAccessFlags,
         selfType?: ClassType | TypeVarType
     ): TypeResult | undefined;
+    getTorchModuleCallSignature: (node: ExpressionNode, classType: ClassType) => Type | undefined;
     getBoundMagicMethod: (
         classType: ClassType,
         memberName: string,

@@ -177,6 +177,7 @@ import {
     getTypeOfBinaryOperation,
     getTypeOfTernaryOperation,
     getTypeOfUnaryOperation,
+    refineFloatPowerType,
 } from './operations';
 import {
     getParamListDetails,
@@ -3524,6 +3525,16 @@ export function createTypeEvaluator(
         const nextMethodName = isAsync ? '__anext__' : '__next__';
         let isValidIterator = true;
         let isIncomplete = typeResult.isIncomplete;
+
+        // An nn.ModuleList that remembers its module type iterates as that type.
+        if (
+            !isAsync &&
+            isClassInstance(typeResult.type) &&
+            ClassType.isTorchModuleList(typeResult.type) &&
+            typeResult.type.priv.torchModuleListElement
+        ) {
+            return { type: typeResult.type.priv.torchModuleListElement, isIncomplete };
+        }
 
         let type = transformPossibleRecursiveTypeAlias(typeResult.type);
         type = makeTopLevelTypeVarsConcrete(type);
@@ -8950,6 +8961,28 @@ export function createTypeEvaluator(
             }
         }
 
+        // An nn.ModuleList that remembers its module type reads an int index as that
+        // type, and a slice as the same ModuleList.
+        if (
+            isClassInstance(baseType) &&
+            ClassType.isTorchModuleList(baseType) &&
+            baseType.priv.torchModuleListElement &&
+            usage.method === 'get' &&
+            node.d.items.length === 1 &&
+            node.d.items[0].d.argCategory === ArgCategory.Simple &&
+            !node.d.items[0].d.name &&
+            !node.d.trailingComma
+        ) {
+            const indexExpr = node.d.items[0].d.valueExpr;
+            const indexType = getTypeOfExpression(indexExpr).type;
+            if (indexExpr.nodeType === ParseNodeType.Slice) {
+                return { type: baseType };
+            }
+            if (isClassInstance(indexType) && ClassType.isBuiltIn(indexType, 'int')) {
+                return { type: baseType.priv.torchModuleListElement };
+            }
+        }
+
         // Handle reads of a frozendict or dict with known entries specially.
         if (
             isClassInstance(baseType) &&
@@ -9595,6 +9628,7 @@ export function createTypeEvaluator(
                 } else {
                     typeResult.overloadsUsedForCall = callResult.overloadsUsedForCall;
                     typeResult.type = applyFrozenDictMethodCall(evaluatorInterface, node, typeResult.type);
+                    typeResult.type = refinePowCall(node, argList, baseTypeResult.type, typeResult.type);
                     const varsFunction = isOverloaded(baseTypeResult.type)
                         ? OverloadedType.getOverloads(baseTypeResult.type)[0]
                         : baseTypeResult.type;
@@ -12470,7 +12504,7 @@ export function createTypeEvaluator(
         const callResult = validateCallArgs(
             errorNode,
             argList,
-            { type: callMethodType },
+            { type: getTorchModuleForward(errorNode, expandedCallType, recursionCount) ?? callMethodType },
             constraints,
             skipUnknownArgCheck,
             inferenceContext,
@@ -12478,6 +12512,9 @@ export function createTypeEvaluator(
         );
 
         let returnType = callResult.returnType ?? UnknownType.create();
+        if (!callResult.argumentErrors) {
+            returnType = getTorchSequentialReturnType(errorNode, expandedCallType, argList, recursionCount) ?? returnType;
+        }
         if (
             isTypeVar(unexpandedCallType) &&
             TypeBase.isInstantiable(unexpandedCallType) &&
@@ -12494,6 +12531,146 @@ export function createTypeEvaluator(
             argumentErrors: callResult.argumentErrors,
             overloadsUsedForCall: callResult.overloadsUsedForCall,
         };
+    }
+
+    // torch declares nn.Module.__call__ as Callable[..., Any], so `layer(x)` would be Any. When a
+    // Module instance is called through that inherited __call__ and its class defines its own
+    // forward, check the call against the bound forward instead (Linear(3, 4)(x) is a Tensor).
+    function getTorchModuleForward(
+        errorNode: ExpressionNode,
+        classType: ClassType,
+        recursionCount: number
+    ): Type | undefined {
+        const torchModuleName = 'torch.nn.modules.module.Module';
+        const callMember = lookUpClassMember(classType, '__call__', MemberAccessFlags.SkipInstanceMembers);
+        if (!callMember || !isClass(callMember.classType) || callMember.classType.shared.fullName !== torchModuleName) {
+            return undefined;
+        }
+        const forwardMember = lookUpClassMember(classType, 'forward', MemberAccessFlags.SkipInstanceMembers);
+        if (
+            !forwardMember ||
+            !isClass(forwardMember.classType) ||
+            forwardMember.classType.shared.fullName === torchModuleName
+        ) {
+            return undefined;
+        }
+        const forwardResult = getTypeOfBoundMember(
+            errorNode,
+            classType,
+            'forward',
+            /* usage */ undefined,
+            /* diag */ undefined,
+            MemberAccessFlags.SkipInstanceMembers | MemberAccessFlags.SkipAttributeAccessOverride,
+            /* selfType */ undefined,
+            recursionCount
+        );
+        if (!forwardResult || forwardResult.typeErrors || isAnyOrUnknown(forwardResult.type)) {
+            return undefined;
+        }
+        return forwardResult.type;
+    }
+
+    // torch's Sequential.forward has no annotations, so seq(x) would be Any. A Sequential
+    // that remembers its modules (see torchSequentialModules) passes the argument through
+    // each module's call in turn: Sequential(Linear(4, 16), GELU())(x) is a Tensor. If a
+    // module can't take what the one before it returns, the type is left as declared.
+    function getTorchSequentialReturnType(
+        errorNode: ExpressionNode,
+        classType: ClassType,
+        argList: Arg[],
+        recursionCount: number
+    ): Type | undefined {
+        const modules = classType.priv.torchSequentialModules;
+        if (
+            !modules ||
+            !ClassType.isTorchSequential(classType) ||
+            argList.length !== 1 ||
+            argList[0].argCategory !== ArgCategory.Simple ||
+            argList[0].name
+        ) {
+            return undefined;
+        }
+        const arg = argList[0];
+        let current: Type | undefined =
+            arg.typeResult?.type ?? (arg.valueExpression ? getTypeOfExpression(arg.valueExpression).type : undefined);
+        for (const module of modules) {
+            if (!current) {
+                return undefined;
+            }
+            const input: Type = current;
+            const moduleResult = suppressDiagnostics(errorNode, () =>
+                validateCallArgs(
+                    errorNode,
+                    [{ argCategory: ArgCategory.Simple, typeResult: { type: input } }],
+                    { type: module },
+                    /* constraints */ undefined,
+                    /* skipUnknownArgCheck */ true,
+                    /* inferenceContext */ undefined,
+                    recursionCount + 1
+                )
+            );
+            if (moduleResult.argumentErrors) {
+                return undefined;
+            }
+            current = moduleResult.returnType;
+        }
+        return current;
+    }
+
+    // The signature an nn.Module instance is called with, for hover: its forward (see
+    // getTorchModuleForward). A Sequential that remembers its modules takes what its
+    // first module takes and returns what passing that through every module gives:
+    // Sequential(Linear(4, 16), GELU()) shows as (input: Tensor) -> Tensor.
+    function getTorchModuleCallSignature(node: ExpressionNode, classType: ClassType): Type | undefined {
+        const modules = classType.priv.torchSequentialModules;
+        if (!modules || !ClassType.isTorchSequential(classType)) {
+            return getTorchModuleForward(node, classType, /* recursionCount */ 0);
+        }
+        const first = modules[0];
+        const firstSignature = isClass(first) ? getTorchModuleCallSignature(node, first) : undefined;
+        if (!firstSignature || !isFunction(firstSignature) || firstSignature.shared.parameters.length === 0) {
+            return undefined;
+        }
+        const inputType = FunctionType.getParamType(firstSignature, 0);
+        const returnType = getTorchSequentialReturnType(
+            node,
+            classType,
+            [{ argCategory: ArgCategory.Simple, typeResult: { type: inputType } }],
+            /* recursionCount */ 0
+        );
+        if (!returnType) {
+            return undefined;
+        }
+        const signature = FunctionType.clone(firstSignature);
+        signature.shared.declaredReturnType = returnType;
+        if (signature.priv.specializedTypes) {
+            signature.priv.specializedTypes = { ...signature.priv.specializedTypes, returnType };
+        }
+        return signature;
+    }
+
+    // pow(base, exp) with ints and floats: as base ** exp (see refineFloatPowerType).
+    function refinePowCall(node: CallNode, argList: Arg[], calleeType: Type, returnType: Type): Type {
+        const callee = isOverloaded(calleeType) ? OverloadedType.getOverloads(calleeType)[0] : calleeType;
+        if (
+            !callee ||
+            !isFunction(callee) ||
+            callee.shared.fullName !== 'builtins.pow' ||
+            argList.length !== 2 ||
+            argList.some((arg) => arg.argCategory !== ArgCategory.Simple || arg.name || !arg.valueExpression)
+        ) {
+            return returnType;
+        }
+        const [baseExpr, exponentExpr] = argList.map((arg) => arg.valueExpression!);
+        return refineFloatPowerType(
+            evaluatorInterface,
+            node,
+            returnType,
+            getTypeOfExpression(baseExpr).type,
+            getTypeOfExpression(exponentExpr).type,
+            baseExpr,
+            exponentExpr
+        );
     }
 
     // Evaluates the type of the "cast" call.
@@ -25926,7 +26103,7 @@ export function createTypeEvaluator(
         return getInferredReturnTypeResult(type, options?.callSiteInfo);
     }
 
-    // A dict, frozendict or SimpleNamespace return annotation bounds the inferred shape instead of
+    // A dict, frozendict, SimpleNamespace or torch ModuleDict return annotation bounds the inferred shape instead of
     // erasing it, also where the class sits inside the annotation (list[SimpleNamespace],
     // dict[str, dict], SimpleNamespace | None, tuple[dict, int]): when the body gives
     // the same classes with known keys, callers see them. For a dict with known keys,
@@ -26027,7 +26204,19 @@ export function createTypeEvaluator(
     function isShapeableClass(type: ClassType) {
         return (
             !type.priv.knownEntries &&
-            (ClassType.isBuiltIn(type, 'dict') || isFrozenDictClass(type) || ClassType.isSimpleNamespace(type))
+            (ClassType.isBuiltIn(type, 'dict') ||
+                isFrozenDictClass(type) ||
+                ClassType.isSimpleNamespace(type) ||
+                ClassType.isTorchModuleDict(type))
+        );
+    }
+
+    // A torch nn.Sequential or nn.ModuleList that doesn't remember its modules: a
+    // `-> nn.Sequential` annotation keeps the modules the body builds.
+    function isShapeableTorchContainer(type: ClassType) {
+        return (
+            (ClassType.isTorchSequential(type) && !type.priv.torchSequentialModules) ||
+            (ClassType.isTorchModuleList(type) && !type.priv.torchModuleListElement)
         );
     }
 
@@ -26042,7 +26231,7 @@ export function createTypeEvaluator(
         if (!isClassInstance(type)) {
             return false;
         }
-        if (isShapeableClass(type)) {
+        if (isShapeableClass(type) || isShapeableTorchContainer(type)) {
             return true;
         }
         const args = type.priv.tupleTypeArgs?.map((arg) => arg.type) ?? type.priv.typeArgs ?? [];
@@ -26103,6 +26292,17 @@ export function createTypeEvaluator(
             if (shapedCandidate) {
                 return shapeKnownEntries(declared, shapedCandidate, matching, depth);
             }
+        }
+
+        // An nn.Sequential or nn.ModuleList takes the body's when all of them agree.
+        if (isShapeableTorchContainer(declared)) {
+            const first = matching[0];
+            const remembers = (candidate: ClassType) =>
+                !!candidate.priv.torchSequentialModules || !!candidate.priv.torchModuleListElement;
+            if (remembers(first) && matching.every((candidate) => isTypeSame(candidate, first))) {
+                return first;
+            }
+            return undefined;
         }
 
         // A container: its type arguments, item by item.
@@ -31736,6 +31936,7 @@ export function createTypeEvaluator(
         getTypeOfMember,
         getTypeOfBoundMember,
         getBoundMagicMethod,
+        getTorchModuleCallSignature,
         getTypeOfMagicMethodCall,
         bindFunctionToClassOrObject,
         getCallbackProtocolType,

@@ -48,6 +48,7 @@ import {
     specializeTupleClass,
     specializeWithDefaultTypeArgs,
     transformPossibleRecursiveTypeAlias,
+    doForEachSubtype,
 } from './typeUtils';
 import {
     ClassType,
@@ -65,6 +66,7 @@ import {
     isInstantiableClass,
     isNever,
     isUnion,
+    isUnknown,
 } from './types';
 
 // Maps binary operators to the magic methods that implement them.
@@ -254,6 +256,13 @@ export function validateBinaryOperation(
             overloadsUsedForCall.push(...(result.overloadsUsedForCall ?? []));
 
             type = result.type;
+
+            if (operator === OperatorType.Power && type) {
+                const leftExpr = errorNode.nodeType === ParseNodeType.BinaryOperation ? errorNode.d.leftExpr : undefined;
+                const rightExpr =
+                    errorNode.nodeType === ParseNodeType.BinaryOperation ? errorNode.d.rightExpr : undefined;
+                type = refineFloatPowerType(evaluator, errorNode, type, leftType, rightType, leftExpr, rightExpr);
+            }
         }
     }
 
@@ -1513,4 +1522,79 @@ function validateArithmeticOperation(
     );
 
     return { type, overloadsUsedForCall, magicMethodDeprecationInfo: deprecatedInfo };
+}
+
+// typeshed types float ** float, int ** float and pow() of them as Any: a negative base with
+// a fractional exponent gives a complex number ((-8) ** 0.5 is about 2.83j). That makes
+// every scale = d ** -0.5 Any. When the result is Any, both operands are int or float and
+// at least one is a float, this gives float instead, or complex when the operands are
+// literal numbers that make one. A non-literal negative base with a fractional exponent
+// is still typed float, which is wrong at runtime. int ** int is left as declared:
+// its result is an int or a float depending on the sign of the exponent.
+export function refineFloatPowerType(
+    evaluator: TypeEvaluator,
+    node: ExpressionNode,
+    resultType: Type,
+    baseType: Type,
+    exponentType: Type,
+    baseExpr: ExpressionNode | undefined,
+    exponentExpr: ExpressionNode | undefined
+): Type {
+    // typeshed also gives complex for a negative int literal base whatever the
+    // exponent: (-8) ** 2.0 is 64.0. That's corrected when both values are known.
+    const isComplexResult = isClassInstance(resultType) && ClassType.isBuiltIn(resultType, 'complex');
+    if ((!isAnyOrUnknown(resultType) || isUnknown(resultType)) && !isComplexResult) {
+        return resultType;
+    }
+
+    let sawFloat = false;
+    const isIntOrFloat = (type: Type) => {
+        let allIntOrFloat = true;
+        doForEachSubtype(type, (subtype) => {
+            if (isClassInstance(subtype) && ClassType.isBuiltIn(subtype, 'float')) {
+                sawFloat = true;
+            } else if (!isClassInstance(subtype) || !ClassType.isBuiltIn(subtype, 'int')) {
+                allIntOrFloat = false;
+            }
+        });
+        return allIntOrFloat;
+    };
+    if (!isIntOrFloat(baseType) || !isIntOrFloat(exponentType) || !sawFloat) {
+        return resultType;
+    }
+
+    const base = getNumberValue(baseType, baseExpr);
+    const exponent = getNumberValue(exponentType, exponentExpr);
+    if (isComplexResult && (base === undefined || exponent === undefined)) {
+        return resultType;
+    }
+    if (base !== undefined && exponent !== undefined && base < 0 && !Number.isInteger(exponent)) {
+        return evaluator.getBuiltInObject(node, 'complex');
+    }
+    return evaluator.getBuiltInObject(node, 'float');
+}
+
+// The value of an int literal type, or of a number written in the code (8, 0.5, -0.5).
+function getNumberValue(type: Type, expr: ExpressionNode | undefined): number | undefined {
+    if (isClassInstance(type) && ClassType.isBuiltIn(type, 'int')) {
+        const value = type.priv.literalValue;
+        if (typeof value === 'number' || typeof value === 'bigint') {
+            return Number(value);
+        }
+    }
+    if (!expr) {
+        return undefined;
+    }
+    let sign = 1;
+    if (
+        expr.nodeType === ParseNodeType.UnaryOperation &&
+        (expr.d.operator === OperatorType.Subtract || expr.d.operator === OperatorType.Add)
+    ) {
+        sign = expr.d.operator === OperatorType.Subtract ? -1 : 1;
+        expr = expr.d.expr;
+    }
+    if (expr.nodeType === ParseNodeType.Number && !expr.d.isImaginary) {
+        return sign * Number(expr.d.value);
+    }
+    return undefined;
 }

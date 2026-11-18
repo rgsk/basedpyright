@@ -99,6 +99,22 @@ export function assignClassToProtocol(
         srcType = evaluator.stripLiteralValue(srcType) as ClassType;
     }
 
+    // An nn.ModuleList that remembers its module type (see torchModuleListElement) is an
+    // Iterable of that type, not of Module as its __iter__ declares: zip(blocks, ...)
+    // gives Blocks. Matched as Iterable[element], which also keeps it out of the cache
+    // entries of a plain ModuleList.
+    if (
+        TypeBase.isInstance(srcType) &&
+        ClassType.isTorchModuleList(srcType) &&
+        srcType.priv.torchModuleListElement &&
+        destType.shared.fullName === 'typing.Iterable' &&
+        destType.shared.typeParams.length === 1
+    ) {
+        srcType = ClassType.cloneAsInstance(
+            ClassType.specialize(destType, [srcType.priv.torchModuleListElement])
+        );
+    }
+
     const enforceInvariance = (flags & AssignTypeFlags.Invariant) !== 0;
 
     // Use a stack of pending protocol class evaluations to detect recursion.

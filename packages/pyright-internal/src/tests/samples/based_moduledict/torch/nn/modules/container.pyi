@@ -1,6 +1,6 @@
 # torch.nn.ModuleDict and ParameterDict, declared as in torch 2.10.
-from collections.abc import Iterator, Mapping
-from typing import Any
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any, Self, overload
 
 from .module import Module
 
@@ -22,3 +22,14 @@ class ParameterDict(Module):
 
 class Sequential(Module):
     def __init__(self, *args: Module) -> None: ...
+    def forward(self, input): ...  # unannotated, as in torch
+    def append(self, module: Module) -> Self: ...
+
+class ModuleList(Module):
+    def __init__(self, modules: Iterable[Module] | None = None) -> None: ...
+    @overload
+    def __getitem__(self, idx: slice) -> ModuleList: ...
+    @overload
+    def __getitem__(self, idx: int) -> Module: ...
+    def __iter__(self) -> Iterator[Module]: ...
+    def __len__(self) -> int: ...

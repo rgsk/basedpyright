@@ -876,6 +876,17 @@ export interface ClassDetailsPriv {
     // an error then.
     knownEntriesFromOuterScope?: boolean;
 
+    // PyTorch's nn.Sequential built from modules (Sequential(Linear(...), GELU(), ...)):
+    // the type of each module, in order. Calling it runs its argument through each
+    // module's call in turn, since torch's Sequential.forward has no annotations. Part
+    // of the type's identity, like known entries: Sequential[A] | Sequential[B] keeps both.
+    torchSequentialModules?: Type[] | undefined;
+
+    // PyTorch's nn.ModuleList built from an iterable of modules (ModuleList([Block() for _
+    // in ...])): the type of its modules. Iterating it or reading an int index gives
+    // this rather than Module. Part of the type's identity, like known entries.
+    torchModuleListElement?: Type | undefined;
+
     // Indicates whether the class is an asymmetric descriptor
     // or property - one where the __get__ and __set__ types differ.
     // If undefined, it hasn't been tested yet for asymmetry.
@@ -1113,6 +1124,30 @@ export namespace ClassType {
         return classType.shared.fullName === 'torch.nn.modules.container.ModuleDict';
     }
 
+    // PyTorch's nn.Sequential (not its subclasses). Built from modules, it remembers
+    // their types (see torchSequentialModules).
+    export function isTorchSequential(classType: ClassType): boolean {
+        return classType.shared.fullName === 'torch.nn.modules.container.Sequential';
+    }
+
+    // PyTorch's nn.ModuleList (not its subclasses). Built from modules, it remembers
+    // their type (see torchModuleListElement).
+    export function isTorchModuleList(classType: ClassType): boolean {
+        return classType.shared.fullName === 'torch.nn.modules.container.ModuleList';
+    }
+
+    export function cloneForTorchModuleListElement(classType: ClassType, element: Type): ClassType {
+        const newClassType = TypeBase.cloneType(classType);
+        newClassType.priv.torchModuleListElement = element;
+        return newClassType;
+    }
+
+    export function cloneForTorchSequentialModules(classType: ClassType, modules: Type[]): ClassType {
+        const newClassType = TypeBase.cloneType(classType);
+        newClassType.priv.torchSequentialModules = modules;
+        return newClassType;
+    }
+
     // Determines whether two instances have the same known entries.
     export function isKnownEntriesSame(
         type1: ClassType,
@@ -1120,6 +1155,27 @@ export namespace ClassType {
         options: TypeSameOptions = {},
         recursionCount = 0
     ): boolean {
+        // An nn.Sequential's modules and an nn.ModuleList's module type count as well.
+        const modules1 = type1.priv.torchSequentialModules;
+        const modules2 = type2.priv.torchSequentialModules;
+        if (modules1 || modules2) {
+            if (
+                !modules1 ||
+                !modules2 ||
+                modules1.length !== modules2.length ||
+                modules1.some((module, index) => !isTypeSame(module, modules2[index], options, recursionCount))
+            ) {
+                return false;
+            }
+        }
+        const element1 = type1.priv.torchModuleListElement;
+        const element2 = type2.priv.torchModuleListElement;
+        if (element1 || element2) {
+            if (!element1 || !element2 || !isTypeSame(element1, element2, options, recursionCount)) {
+                return false;
+            }
+        }
+
         const entries1 = type1.priv.knownEntries;
         const entries2 = type2.priv.knownEntries;
 

@@ -1,9 +1,12 @@
 # The parts of torch.nn.Module the sample uses, declared as in torch 2.10.
-from typing import Self, overload
+from collections.abc import Callable
+from typing import Any, Self, overload
 
 from torch import Tensor, device, dtype
 
 class Module:
+    forward: Callable[..., Any]
+    __call__: Callable[..., Any]
     @overload
     def to(self, device: device | str | None = ..., dtype: dtype | None = ..., non_blocking: bool = ...) -> Self: ...
     @overload
@@ -21,9 +24,11 @@ class Module:
 class Linear(Module):
     weight: Tensor
     def __init__(self, in_features: int, out_features: int) -> None: ...
+    def forward(self, input: Tensor) -> Tensor: ...
 
 class Embedding(Module):
     weight: Tensor
     def __init__(self, num_embeddings: int, embedding_dim: int) -> None: ...
 
-class ReLU(Module): ...
+class ReLU(Module):
+    def forward(self, input: Tensor) -> Tensor: ...

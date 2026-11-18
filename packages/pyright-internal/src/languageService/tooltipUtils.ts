@@ -72,7 +72,10 @@ export function getToolTipForType(
 ): string {
     // Support __call__ method for class instances to show the signature of the method
     if (type.category === TypeCategory.Class && isClassInstance(type) && typeNode) {
-        const callMethodResult = getBoundCallMethod(evaluator, typeNode, type);
+        // An nn.Module shows the signature it's really called with (its forward), not
+        // torch's Module.__call__, which is Callable[..., Any].
+        const moduleSignature = evaluator.getTorchModuleCallSignature(typeNode, type);
+        const callMethodResult = moduleSignature ? { type: moduleSignature } : getBoundCallMethod(evaluator, typeNode, type);
         if (
             callMethodResult?.type.category === TypeCategory.Function ||
             callMethodResult?.type.category === TypeCategory.Overloaded

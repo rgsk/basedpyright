@@ -380,3 +380,18 @@ test('torch nn.ModuleDict with literal keys', () => {
     const analysisResults = typeAnalyzeSampleFiles(['based_moduledict/sample.py'], configOptions);
     validateResults(analysisResults, 2);
 });
+
+test('calling a torch nn.Module checks the call against its forward', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    configOptions.projectRoot = UriEx.file(resolveSampleFilePath('based_moduledict'));
+    const analysisResults = typeAnalyzeSampleFiles(['based_moduledict/module_call.py'], configOptions);
+    validateResults(analysisResults, 2);
+});
+
+test('float ** float is float, or complex for literal numbers that make one', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    const analysisResults = typeAnalyzeSampleFiles(['based_float_power.py'], configOptions);
+    validateResults(analysisResults, 0);
+});

@@ -25,7 +25,8 @@ a %= b
 reveal_type(a, expected_text="float")
 
 a **= b
-reveal_type(a, expected_text="Any")
+# basedpyright-frozendict: float ** float is float, not typeshed's Any (based_float_power.py).
+reveal_type(a, expected_text="float")
 
 a = 1
 
