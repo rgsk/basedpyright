@@ -1621,7 +1621,13 @@ export abstract class LanguageServerBase implements LanguageServerInterface, Dis
         // A library/out-of-workspace file may have been transiently opened (e.g. via go-to-definition)
         // and analyzed; once the client closes it, a re-pull must clear those diagnostics by returning
         // an empty `full` report rather than re-analyzing the now-closed file.
-        if (workspace.service.checkOnlyOpenFiles && !this.openFileMap.has(uri.key)) {
+        // Notebook cells are open too, though they're tracked in _openCells rather than openFileMap;
+        // without this, every cell got an empty report and notebooks showed no diagnostics.
+        if (
+            workspace.service.checkOnlyOpenFiles &&
+            !this.openFileMap.has(uri.key) &&
+            !this._convertUriToLspNotebookCellUri(uri)
+        ) {
             return result;
         }
 

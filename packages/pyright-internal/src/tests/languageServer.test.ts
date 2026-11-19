@@ -14,6 +14,7 @@ import {
     ConfigurationItem,
     DidChangeWorkspaceFoldersNotification,
     DidCloseTextDocumentNotification,
+    DidOpenNotebookDocumentNotification,
     DocumentDiagnosticRequest,
     DiagnosticSeverity,
     DidChangeTextDocumentNotification,
@@ -21,6 +22,7 @@ import {
     InitializedNotification,
     InitializeRequest,
     MarkupContent,
+    NotebookCellKind,
     WillRenameFilesRequest,
 } from 'vscode-languageserver';
 
@@ -519,6 +521,65 @@ describe(`Basic language server tests`, () => {
                             reportClosed?.items
                         )}`
                     );
+                });
+
+                // Notebook cells are tracked apart from open text files; in open-files-only mode a pull
+                // for a cell must still report its diagnostics (it used to return an empty report, so
+                // notebooks showed no errors in VS Code).
+                test('notebook cell reports diagnostics on pull (open-files-only)', async () => {
+                    const code = `
+// @filename: root/test.py
+//// [|/*marker*/|]
+        `;
+                    const settings = [
+                        {
+                            item: {
+                                scopeUri: `file://${normalizeSlashes(DEFAULT_WORKSPACE_ROOT, '/')}`,
+                                section: 'python.analysis',
+                            },
+                            value: {
+                                diagnosticMode: 'openFilesOnly',
+                            },
+                        },
+                    ];
+
+                    const info = await runLanguageServer(
+                        DEFAULT_WORKSPACE_ROOT,
+                        code,
+                        /* callInitialize */ true,
+                        settings,
+                        undefined,
+                        /* supportsBackgroundThread */ true,
+                        supportsPullDiagnostics
+                    );
+
+                    const fileUri = info.testData.markerPositions.get('marker')!.fileUri.toString();
+                    const notebookUri = fileUri.replace(/test\.py$/, 'notebook.ipynb');
+                    const cellUri = notebookUri.replace(/^file:/, 'vscode-notebook-cell:') + '#W0sZmlsZQ%3D%3D';
+                    info.connection.sendNotification(DidOpenNotebookDocumentNotification.type, {
+                        notebookDocument: {
+                            uri: notebookUri,
+                            notebookType: 'jupyter-notebook',
+                            version: 1,
+                            cells: [{ kind: NotebookCellKind.Code, document: cellUri }],
+                        },
+                        cellTextDocuments: [
+                            { uri: cellUri, languageId: 'python', version: 1, text: 'x: int = "not an int"\n' },
+                        ],
+                    });
+
+                    // The open is handled asynchronously, so pull until the cell is known.
+                    let items: unknown[] = [];
+                    for (let attempt = 0; attempt < 50 && items.length === 0; attempt++) {
+                        const report: any = await info.connection.sendRequest(DocumentDiagnosticRequest.type, {
+                            textDocument: { uri: cellUri },
+                        });
+                        items = report?.items ?? [];
+                        if (items.length === 0) {
+                            await sleep(100);
+                        }
+                    }
+                    assert.ok(items.length > 0, 'expected the notebook cell to report its type error');
                 });
 
                 // Regression guard: the open-state guard must only apply in
