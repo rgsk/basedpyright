@@ -389,6 +389,14 @@ test('calling a torch nn.Module checks the call against its forward', () => {
     validateResults(analysisResults, 2);
 });
 
+test('plt.subplots(n, m) with a known shape gives an array of Axes', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+    configOptions.defaultPythonVersion = pythonVersion3_14;
+    configOptions.projectRoot = UriEx.file(resolveSampleFilePath('based_matplotlib'));
+    const analysisResults = typeAnalyzeSampleFiles(['based_matplotlib/sample.py'], configOptions);
+    validateResults(analysisResults, 1);
+});
+
 test('float ** float is float, or complex for literal numbers that make one', () => {
     const configOptions = new ConfigOptions(Uri.empty());
     configOptions.defaultPythonVersion = pythonVersion3_14;

@@ -160,6 +160,13 @@ import {
     isEnumMetaclass,
 } from './enums';
 import {
+    applyAxesArrayMethodCall,
+    applySubplotsCall,
+    getAxesArrayIndexType,
+    getAxesArrayIteratedType,
+    getAxesArrayMemberType,
+} from './matplotlibAxes';
+import {
     applyDictDisplayEntries,
     applyFrozenDictMethodCall,
     getLiteralKeyOfIndex,
@@ -3536,6 +3543,12 @@ export function createTypeEvaluator(
             return { type: typeResult.type.priv.torchModuleListElement, isIncomplete };
         }
 
+        // A numpy array of matplotlib Axes iterates as Axes (see matplotlibAxes.ts).
+        const axesIteratedType = isAsync ? undefined : getAxesArrayIteratedType(typeResult.type);
+        if (axesIteratedType) {
+            return { type: axesIteratedType, isIncomplete };
+        }
+
         let type = transformPossibleRecursiveTypeAlias(typeResult.type);
         type = makeTopLevelTypeVarsConcrete(type);
         type = removeUnbound(type);
@@ -6395,6 +6408,7 @@ export function createTypeEvaluator(
             { method: 'get' },
             flags | EvalFlags.NoSpecialize
         );
+        typeResult.type = getAxesArrayMemberType(baseTypeResult.type, node.d.member.d.value, typeResult.type);
 
         if (isCodeFlowSupportedForReference(node)) {
             // Before performing code flow analysis, update the cache to prevent recursion.
@@ -8961,6 +8975,14 @@ export function createTypeEvaluator(
             }
         }
 
+        // A numpy array of matplotlib Axes (see matplotlibAxes.ts).
+        if (usage.method === 'get') {
+            const axesIndexType = getAxesArrayIndexType(evaluatorInterface, node, baseType);
+            if (axesIndexType) {
+                return { type: axesIndexType };
+            }
+        }
+
         // An nn.ModuleList that remembers its module type reads an int index as that
         // type, and a slice as the same ModuleList.
         if (
@@ -9629,6 +9651,8 @@ export function createTypeEvaluator(
                     typeResult.overloadsUsedForCall = callResult.overloadsUsedForCall;
                     typeResult.type = applyFrozenDictMethodCall(evaluatorInterface, node, typeResult.type);
                     typeResult.type = refinePowCall(node, argList, baseTypeResult.type, typeResult.type);
+                    typeResult.type = applySubplotsCall(evaluatorInterface, node, baseTypeResult.type, typeResult.type);
+                    typeResult.type = applyAxesArrayMethodCall(evaluatorInterface, node, typeResult.type);
                     const varsFunction = isOverloaded(baseTypeResult.type)
                         ? OverloadedType.getOverloads(baseTypeResult.type)[0]
                         : baseTypeResult.type;

@@ -887,6 +887,12 @@ export interface ClassDetailsPriv {
     // this rather than Module. Part of the type's identity, like known entries.
     torchModuleListElement?: Type | undefined;
 
+    // A numpy ndarray of matplotlib Axes from plt.subplots(3, 1) or fig.subplots(2, 3), or
+    // its .flat (a numpy flatiter): the Axes type and the number of dimensions (1 or 2;
+    // always 1 for a flatiter). Indexing to an element or iterating it gives Axes rather
+    // than Any. Part of the type's identity, like known entries. See matplotlibAxes.ts.
+    axesArray?: { element: Type; ndim: number } | undefined;
+
     // Indicates whether the class is an asymmetric descriptor
     // or property - one where the __get__ and __set__ types differ.
     // If undefined, it hasn't been tested yet for asymmetry.
@@ -1142,6 +1148,12 @@ export namespace ClassType {
         return newClassType;
     }
 
+    export function cloneForAxesArray(classType: ClassType, element: Type, ndim: number): ClassType {
+        const newClassType = TypeBase.cloneType(classType);
+        newClassType.priv.axesArray = { element, ndim };
+        return newClassType;
+    }
+
     export function cloneForTorchSequentialModules(classType: ClassType, modules: Type[]): ClassType {
         const newClassType = TypeBase.cloneType(classType);
         newClassType.priv.torchSequentialModules = modules;
@@ -1172,6 +1184,19 @@ export namespace ClassType {
         const element2 = type2.priv.torchModuleListElement;
         if (element1 || element2) {
             if (!element1 || !element2 || !isTypeSame(element1, element2, options, recursionCount)) {
+                return false;
+            }
+        }
+
+        const axes1 = type1.priv.axesArray;
+        const axes2 = type2.priv.axesArray;
+        if (axes1 || axes2) {
+            if (
+                !axes1 ||
+                !axes2 ||
+                axes1.ndim !== axes2.ndim ||
+                !isTypeSame(axes1.element, axes2.element, options, recursionCount)
+            ) {
                 return false;
             }
         }

@@ -1,0 +1,16 @@
+from typing import Any, Literal, overload
+
+import numpy as np
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+
+@overload
+def subplots(
+    nrows: Literal[1] = ..., ncols: Literal[1] = ..., *, squeeze: Literal[True] = ..., figsize: Any = ...
+) -> tuple[Figure, Axes]: ...
+@overload
+def subplots(
+    nrows: int = ..., ncols: int = ..., *, squeeze: Literal[False], figsize: Any = ...
+) -> tuple[Figure, np.ndarray]: ...
+@overload
+def subplots(nrows: int = ..., ncols: int = ..., *, squeeze: bool = ..., figsize: Any = ...) -> tuple[Figure, Any]: ...

@@ -15,6 +15,7 @@ import { ConstraintSolution } from './constraintSolution';
 import { assignTypeVar } from './constraintSolver';
 import { ConstraintTracker } from './constraintTracker';
 import { DeclarationType } from './declaration';
+import { getAxesArrayIteratedType } from './matplotlibAxes';
 import { assignProperty } from './properties';
 import { Symbol } from './symbol';
 import { getLastTypedDeclarationForSymbol, isEffectivelyClassVar } from './symbolUtils';
@@ -113,6 +114,16 @@ export function assignClassToProtocol(
         srcType = ClassType.cloneAsInstance(
             ClassType.specialize(destType, [srcType.priv.torchModuleListElement])
         );
+    }
+
+    // A numpy array of matplotlib Axes is an Iterable of Axes (see matplotlibAxes.ts).
+    const axesIteratedType = TypeBase.isInstance(srcType) ? getAxesArrayIteratedType(srcType) : undefined;
+    if (
+        axesIteratedType &&
+        destType.shared.fullName === 'typing.Iterable' &&
+        destType.shared.typeParams.length === 1
+    ) {
+        srcType = ClassType.cloneAsInstance(ClassType.specialize(destType, [axesIteratedType]));
     }
 
     const enforceInvariance = (flags & AssignTypeFlags.Invariant) !== 0;

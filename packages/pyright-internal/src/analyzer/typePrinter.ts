@@ -12,6 +12,7 @@ import { ConfigOptions } from '../common/configOptions';
 import { assert } from '../common/debug';
 import { Uri } from '../common/uri/uri';
 import { ExpressionNode, ParamCategory, ParseNodeType } from '../parser/parseNodes';
+import { getAxesArrayTypeArgs } from './matplotlibAxes';
 import { isTypedKwargs } from './parameterUtils';
 import * as ParseTreeUtils from './parseTreeUtils';
 import { printBytesLiteral, printStringLiteral } from './typePrinterUtils';
@@ -1146,6 +1147,21 @@ function printObjectTypeForClassInternal(
         objName = type.shared.fullName;
     } else {
         importTracker?.add(type.shared, objName);
+    }
+
+    // A numpy array of matplotlib Axes: ndarray[Axes, ndim=2], flatiter[Axes].
+    const axesArray = getAxesArrayTypeArgs(type);
+    if (axesArray) {
+        const elementText = printTypeInternal(
+            axesArray.element,
+            printTypeFlags,
+            returnTypeCallback,
+            uniqueNameMap,
+            recursionTypes,
+            recursionCount,
+            importTracker
+        );
+        return `${objName}[${[elementText, axesArray.ndimText].filter((text) => text).join(', ')}]`;
     }
 
     // An nn.ModuleList built from modules prints their type: ModuleList[Block].
