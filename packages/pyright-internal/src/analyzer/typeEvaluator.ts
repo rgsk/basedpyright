@@ -12574,15 +12574,15 @@ export function createTypeEvaluator(
     // that remembers its modules (see torchSequentialModules) passes the argument through
     // each module's call in turn: Sequential(Linear(4, 16), GELU())(x) is a Tensor. If a
     // module can't take what the one before it returns, the type is left as declared.
+    // A Sequential whose modules aren't known (Sequential(*layers), a plain -> nn.Sequential)
+    // gives back the argument's type: Tensor in, Tensor out, as for almost every real model.
     function getTorchSequentialReturnType(
         errorNode: ExpressionNode,
         classType: ClassType,
         argList: Arg[],
         recursionCount: number
     ): Type | undefined {
-        const modules = classType.priv.torchSequentialModules;
         if (
-            !modules ||
             !ClassType.isTorchSequential(classType) ||
             argList.length !== 1 ||
             argList[0].argCategory !== ArgCategory.Simple ||
@@ -12593,6 +12593,10 @@ export function createTypeEvaluator(
         const arg = argList[0];
         let current: Type | undefined =
             arg.typeResult?.type ?? (arg.valueExpression ? getTypeOfExpression(arg.valueExpression).type : undefined);
+        const modules = classType.priv.torchSequentialModules;
+        if (!modules) {
+            return current;
+        }
         for (const module of modules) {
             if (!current) {
                 return undefined;

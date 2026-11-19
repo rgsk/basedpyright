@@ -55,7 +55,12 @@ reveal_type(mlp.to(torch.device()), expected_text="Sequential[Linear, ReLU, Line
 
 # A module that can't take what the one before returns leaves the declared type.
 reveal_type(nn.Sequential(Block(), nn.Linear(4, 4))(x), expected_text="Unknown")
-reveal_type(nn.Sequential()(x), expected_text="Unknown")
+
+# A Sequential whose modules aren't known gives back the argument's type.
+layers: list[nn.Module] = [nn.Linear(4, 4), nn.ReLU()]
+reveal_type(nn.Sequential(*layers), expected_text="Sequential")
+assert_type(nn.Sequential(*layers)(x), torch.Tensor)
+assert_type(nn.Sequential()(x), torch.Tensor)
 
 
 # A ModuleList built from modules remembers their type: iterating it or reading an int
@@ -119,6 +124,7 @@ def from_layers(layers: list[nn.Module]) -> nn.Sequential:
 
 
 reveal_type(from_layers([]), expected_text="Sequential")
+assert_type(from_layers([])(x), torch.Tensor)
 
 
 # Different modules are different types, so a union keeps both.
